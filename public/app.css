@@ -568,3 +568,14 @@ code { background: var(--panel2); padding: 1px 6px; border-radius: 5px; font-siz
 .mgrid.stk-narrow .gm .gmi b { font-size: 12.5px; }
 .mgrid.stk-narrow .gm .gmi small { font-size: 11px; }
 @media (max-width: 560px) { .gm .chip { height: 28px; font-size: 13px; padding: 0 8px; min-width: 38px; } }
+
+/* mover blocos */
+.mvbtns { display: inline-flex; gap: 2px; }
+.mvbtns .btn:disabled { opacity: .25; }
+.mvhead { display: flex; flex-wrap: wrap; gap: 8px; align-items: baseline; padding: 12px 14px; background: var(--panel2); border-radius: 12px; }
+.mvopt { display: flex; gap: 10px; align-items: flex-start; padding: 12px; border: 1px solid var(--line); border-radius: 12px; margin-top: 8px; cursor: pointer; color: var(--text); font-size: 15px; }
+.mvopt input[type=radio] { width: 18px; min-height: 0; margin-top: 3px; accent-color: var(--accent); }
+.mvopt:has(input:checked) { border-color: var(--accent); background: #12261e; }
+.mvrow { display: flex; align-items: center; gap: 10px; padding: 7px 0; border-bottom: 1px solid var(--line); }
+.mvrow:last-child { border-bottom: 0; }
+@media (max-width: 560px) { .mvbtns .btn { width: 30px; } }

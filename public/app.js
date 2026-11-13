@@ -117,6 +117,7 @@ function formData(form) {
   for (const el of form.elements) {
     if (!el.name) continue;
     if (el.type === 'checkbox') o[el.name] = el.checked;
+    else if (el.type === 'radio') { if (el.checked) o[el.name] = el.value; }
     else o[el.name] = el.value;
   }
   return o;
@@ -634,6 +635,7 @@ function viewRundown() {
         <div class="time">${esc(b.start_time || '--:--')}${b.end_time ? `<small>até ${esc(b.end_time)}</small>` : ''}</div>
         <div class="title">${isCur ? '<span class="onair">ON AIR</span>' : ''}<b>☕ ${esc(b.title || 'Intervalo')}</b>${b.notes ? `<span class="muted small">${esc(b.notes)}</span>` : ''}</div>
         ${w ? `<button class="btn sm ${isCur ? 'airoff' : 'airsoft'}" data-setcur="${b.id}">${isCur ? 'Tirar do ar' : '● Pôr no ar'}</button>
+        <span class="mvbtns"><button class="btn sm icon ghost" data-moveblock="${b.id}:-1" title="Passar para antes" ${i === 0 ? 'disabled' : ''}>▲</button><button class="btn sm icon ghost" data-moveblock="${b.id}:1" title="Passar para depois" ${i === blocks.length - 1 ? 'disabled' : ''}>▼</button></span>
         <button class="btn sm icon ghost" data-editblock="${b.id}" aria-label="Editar">✎</button>` : ''}
       </div></div>`;
     }
@@ -661,6 +663,7 @@ function viewRundown() {
         <div class="title">${isCur ? '<span class="onair">ON AIR</span> <span class="tmini" data-t="mini"></span>' : ''}<b>${esc(b.title || (b.slots.length > 1 ? `Painel · ${b.slots.length} oradores` : 'Orador'))}</b>${(() => { const need = b.slots.filter((x) => needsMiking(a.micById[x.mic_id])); if (!need.length) return ''; const ok = need.filter((x) => x.miked).length; return `<span class="mikcount ${ok === need.length ? 'all' : ''}">${MIK_ICON} ${ok}/${need.length} micados</span>`; })()}
           ${b.notes ? `<span class="muted small">${esc(b.notes)}</span>` : ''}</div>
         ${w ? `<button class="btn sm ${isCur ? 'airoff' : 'airsoft'}" data-setcur="${b.id}">${isCur ? 'Tirar do ar' : '● Pôr no ar'}</button>
+        <span class="mvbtns"><button class="btn sm icon ghost" data-moveblock="${b.id}:-1" title="Passar para antes" ${i === 0 ? 'disabled' : ''}>▲</button><button class="btn sm icon ghost" data-moveblock="${b.id}:1" title="Passar para depois" ${i === blocks.length - 1 ? 'disabled' : ''}>▼</button></span>
         <button class="btn sm icon ghost" data-editblock="${b.id}" aria-label="Editar">✎</button>` : ''}
       </div>
       ${slots}
@@ -820,6 +823,63 @@ function blockModal(b) {
       await act(() => api('DELETE', `/api/blocks/${b.id}`), 'Bloco apagado'); scheduleReload();
     }
   });
+}
+
+// ---- mover bloco para cima/baixo: horário + impacto nos micros ----
+const hm2min = (t) => (t ? Number(t.slice(0, 2)) * 60 + Number(t.slice(3, 5)) : null);
+const min2hm = (m) => (m == null ? '' : `${String(Math.floor(((m % 1440) + 1440) % 1440 / 60)).padStart(2, '0')}:${String(((m % 60) + 60) % 60).padStart(2, '0')}`);
+function moveImpact(block, newStart) {
+  // quantas trocas/conflitos de micros o bloco terá na nova posição
+  if (block.kind === 'intervalo' || !block.slots.length) return '';
+  const st = micStateAt(newStart, block.id);
+  const micById = Object.fromEntries(state.ev.mics.map((m) => [m.id, m]));
+  const cnt = {}; block.slots.forEach((sl) => { if (sl.mic_id) cnt[sl.mic_id] = (cnt[sl.mic_id] || 0) + 1; });
+  return block.slots.map((sl) => {
+    const m = micById[sl.mic_id];
+    return `<div class="mvrow">${chip(m)}<span class="grow">${esc(sl.speaker)}</span>${slotStatus(m, sl.speaker, st, sl.mic_id && cnt[sl.mic_id] > 1)}</div>`;
+  }).join('');
+}
+function moveBlockModal(b, dir) {
+  const { blocks } = state.ev;
+  const i = blocks.findIndex((x) => x.id === b.id);
+  const o = blocks[i + dir]; if (!o) return;
+  const durB = b.end_time && b.start_time ? hm2min(b.end_time) - hm2min(b.start_time) : null;
+  const durO = o.end_time && o.start_time ? hm2min(o.end_time) - hm2min(o.start_time) : null;
+  const label = (x) => `${x.start_time || '--:--'} ${x.kind === 'intervalo' ? '☕ ' + (x.title || 'Intervalo') : (x.title || x.slots.map((s) => s.speaker).join(', ') || 'Bloco')}`;
+  // trocar horários: o primeiro dos dois fica com a hora de início do primeiro
+  const first = dir < 0 ? o : b; const firstStart = first.start_time;
+  const swapB = dir < 0 ? firstStart : (firstStart && durO != null ? min2hm(hm2min(firstStart) + durO) : o.start_time);
+  const swapO = dir < 0 ? (firstStart && durB != null ? min2hm(hm2min(firstStart) + durB) : b.start_time) : firstStart;
+  const noTimes = !b.start_time || !o.start_time;
+  const f = modal(dir < 0 ? 'Passar bloco para antes' : 'Passar bloco para depois', `
+    <div class="mvhead"><b>${esc(label(b))}</b><span class="muted">${dir < 0 ? 'passa para antes de' : 'passa para depois de'}</span><b>${esc(label(o))}</b></div>
+    <div class="label-up" style="margin-top:14px">Horário</div>
+    ${noTimes ? '<p class="small muted">Estes blocos não têm hora — só troca a ordem.</p><input type="hidden" name="mode" value="order">' : `
+    <label class="mvopt"><input type="radio" name="mode" value="swap" checked> <span><b>Trocar os horários</b><br><span class="small muted">Este bloco fica às <b>${esc(swapB || '--:--')}</b> e o outro passa para as <b>${esc(swapO || '--:--')}</b>${durB != null || durO != null ? ' (mantendo a duração de cada um)' : ''}.</span></span></label>
+    <label class="mvopt"><input type="radio" name="mode" value="custom"> <span><b>Escolher a hora deste bloco</b><br><span class="row" style="gap:8px;margin-top:6px"><input type="time" name="custom" value="${esc(swapB || '')}" style="width:150px"><span class="small muted">o outro bloco fica como está</span></span></span></label>`}
+    <div class="label-up" style="margin-top:14px">Micros na nova posição</div>
+    <div id="mvimpact" class="card" style="padding:6px 12px">${moveImpact(b, noTimes ? '' : swapB) || '<span class="small muted">Sem oradores com micro neste bloco.</span>'}</div>
+    ${b.kind !== 'intervalo' && b.slots.length ? '<label class="row" style="color:var(--text);margin-top:12px"><input type="checkbox" name="review" checked style="width:auto;min-height:0"> Depois de mover, abrir este bloco para rever / mudar os micros</label>' : ''}`, {
+    submitLabel: 'Mover', wide: true,
+    onSubmit: async (d) => {
+      let body;
+      if (d.mode === 'order' || noTimes) body = { start_time: b.start_time, end_time: b.end_time, swap_with: o.id, swap_sort: true };
+      else if (d.mode === 'custom') {
+        if (!d.custom) throw new Error('Escolhe a hora');
+        body = { start_time: d.custom, end_time: durB != null ? min2hm(hm2min(d.custom) + durB) : b.end_time };
+      } else body = { start_time: swapB, end_time: durB != null ? min2hm(hm2min(swapB) + durB) : '', swap_with: o.id, other_start: swapO, other_end: durO != null ? min2hm(hm2min(swapO) + durO) : '' };
+      await api('POST', `/api/blocks/${b.id}/move`, body);
+      toast('Bloco movido');
+      if (d.review) { state.reviewBlock = b.id; }
+      scheduleReload();
+    },
+  });
+  const upd = () => {
+    const mode = $('[name=mode]:checked', f)?.value || 'order';
+    const t = mode === 'custom' ? $('[name=custom]', f).value : swapB;
+    $('#mvimpact', f).innerHTML = moveImpact(b, noTimes ? '' : t) || '<span class="small muted">Sem oradores com micro neste bloco.</span>';
+  };
+  f.addEventListener('change', upd); f.addEventListener('input', (e) => { if (e.target.name === 'custom') { $('[name=mode][value=custom]', f).checked = true; upd(); } });
 }
 
 function slotModal(sl, block) {
@@ -1335,6 +1395,7 @@ function bindEvent(tab) {
     const t = (sel) => e.target.closest(sel);
     let el;
     if ((el = t('[data-addblock]'))) return blockModal({ kind: el.dataset.addblock });
+    if ((el = t('[data-moveblock]'))) { const [id, dir] = el.dataset.moveblock.split(':').map(Number); return moveBlockModal(state.ev.blocks.find((x) => x.id === id), dir); }
     if ((el = t('[data-editblock]'))) return blockModal(state.ev.blocks.find((b) => b.id === Number(el.dataset.editblock)));
     if (t('[data-import]')) return importModal();
     if ((el = t('[data-editslot]'))) {
@@ -1534,6 +1595,10 @@ function bindEvent(tab) {
     // (mover o cartão no DOM cancela o "pointer capture", por isso ouvimos na janela)
     window.addEventListener('pointermove', move); window.addEventListener('pointerup', up); window.addEventListener('pointercancel', up);
   };
+  if (state.reviewBlock && tab === 'rundown') {
+    const rb = state.ev.blocks.find((x) => x.id === state.reviewBlock); state.reviewBlock = null;
+    if (rb) setTimeout(() => { blockModal(rb); $('#b' + rb.id)?.scrollIntoView({ block: 'center' }); }, 50);
+  }
   if (state.focusAdd) { $(`[data-addslot="${state.focusAdd}"] input`)?.focus(); state.focusAdd = null; }
   // grelha: garantir que a coluna ON AIR fica visível (no telemóvel aparece logo a seguir à coluna dos micros)
   const air = $('.gridwrap th.gair');

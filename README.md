@@ -58,6 +58,11 @@ App web (iPad, telemóvel e PC) para gerir microfones, pilhas e o alinhamento de
   - Ao marcar alguém como micado (ou por micar), a mesma pessoa com o **mesmo micro** nos blocos seguintes muda também automaticamente.
   - Se mudares o micro de um orador, ele volta a "por micar". O púlpito e os micros de ambiente não usam este estado.
   - Fica tudo registado no histórico: "Rui micou Ana Branquinho (micro 4)".
+- **Mover blocos (▲ ▼)**: cada bloco do alinhamento pode passar para antes ou para depois do vizinho. Abre uma janela onde escolhes:
+  - **trocar os horários** dos dois blocos (cada um mantém a duração), ou **escolher outra hora** só para este bloco;
+  - ver a **previsão dos micros** na nova posição: livre, recolher de quem ou repetido;
+  - abrir logo o bloco para **rever ou mudar os micros**.
+  - Fica registado no histórico.
 - **Grelha de micros no Alinhamento**: mostra o evento inteiro de uma vez. Para dar um micro a alguém nesse bloco, toca numa célula vazia.
   - Ao escolher o micro para um orador, cada opção diz se o micro está livre ou quem o teve nos 2 blocos anteriores.
 - **Criar ou editar um bloco com previsão**: ao escrever os oradores e escolher os micros, aparece por baixo de cada um se o micro está ✓ livre, se é preciso ↺ **recolher de** alguém (e de que bloco) ou se está repetido. Há também uma grelha com os 3 blocos anteriores, o bloco novo e o seguinte. Ao editar um bloco, também se mudam, juntam ou tiram oradores.

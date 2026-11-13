@@ -773,6 +773,21 @@ route('PUT', '/api/blocks/:id', (req, res, body, p, u) => {
   { const nt = body.start_time === undefined ? b.start_time : normTime(body.start_time); changed(u, b.event_id, nt !== b.start_time ? `mudou a hora do bloco ${b.start_time || '--:--'} para ${nt || '--:--'}` : `editou o bloco ${b.start_time || ''} ${s(body.title ?? b.title)}`.trim()); }
   return { ok: true };
 });
+// mover um bloco para antes/depois de outro (troca horários ou hora escolhida), numa só operação
+route('POST', '/api/blocks/:id/move', (req, res, body, p, u) => {
+  const b = blockFor(u, p.id);
+  const other = body.swap_with ? get('SELECT * FROM blocks WHERE id = ? AND event_id = ?', Number(body.swap_with), b.event_id) : null;
+  tx(() => {
+    run('UPDATE blocks SET start_time = ?, end_time = ? WHERE id = ?', normTime(body.start_time), normTime(body.end_time), b.id);
+    if (other && body.other_start !== undefined) run('UPDATE blocks SET start_time = ?, end_time = ? WHERE id = ?', normTime(body.other_start), normTime(body.other_end), other.id);
+    if (other && body.swap_sort) { run('UPDATE blocks SET sort = ? WHERE id = ?', other.sort, b.id); run('UPDATE blocks SET sort = ? WHERE id = ?', b.sort, other.id); }
+  });
+  const nb = normTime(body.start_time);
+  changed(u, b.event_id, other && body.other_start !== undefined
+    ? `trocou a ordem dos blocos: ${b.start_time || '--:--'} ${b.title || ''} passou para ${nb || '--:--'} e ${other.start_time || '--:--'} ${other.title || ''} para ${normTime(body.other_start) || '--:--'}`.replace(/\s+/g, ' ')
+    : `moveu o bloco ${b.start_time || '--:--'} ${b.title || ''} para as ${nb || '--:--'}`.replace(/\s+/g, ' '));
+  return { ok: true };
+});
 route('DELETE', '/api/blocks/:id', (req, res, b, p, u) => {
   needWrite(u);
   const bl = blockFor(u, p.id);
