@@ -87,9 +87,20 @@ docker run --rm -v micdesk_data:/data -v $(pwd):/b alpine sh -c "cp /data/micdes
 
 Substitui os ficheiros e corre `docker compose up -d --build`. Se usaste a opção B, faz build da imagem outra vez e, na stack, carrega em **Update the stack**. Os dados ficam no volume e não se perdem.
 
-## Instalar como app no iPad / iPhone
+## Instalar a app nos aparelhos (iPhone, iPad, Android, Windows, Mac)
 
-Abre o endereço no Safari, carrega em **Partilhar → Adicionar ao ecrã principal** e a app abre em ecrã inteiro, como uma app nativa.
+A MicDesk é uma app web instalável (PWA). Fica com ícone próprio, abre em ecrã inteiro ou em janela própria e é sempre a versão mais recente do servidor. Não há lojas de apps nem ficheiros para instalar.
+
+> ⚠ **É obrigatório HTTPS.** Os aparelhos só deixam instalar se o site for aberto com `https://` (por exemplo através do Nginx Proxy Manager com um certificado Let's Encrypt). Com `http://IP:3000` a app funciona no browser, mas não se instala.
+
+Na app há o botão **📲 Instalar app**: aparece no ecrã de login, no aviso da página de eventos e no menu do utilizador. Mostra os passos certos para o aparelho que está a ser usado.
+
+| Aparelho | Como instalar |
+|---|---|
+| **iPhone / iPad** | No Safari: botão Partilhar → **Adicionar ao ecrã principal** |
+| **Android** | No Chrome: botão **Instalar** da app, ou menu ⋮ → **Instalar aplicação** |
+| **Windows** | No Edge ou no Chrome: botão **Instalar**, ou o ícone ⊕ na barra de endereço. A app fica no menu Iniciar |
+| **Mac** | No Safari: **Ficheiro → Adicionar à Dock**. No Chrome ou no Edge: botão **Instalar** |
 
 ## Variáveis de ambiente
 

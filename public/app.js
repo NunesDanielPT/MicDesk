@@ -230,6 +230,7 @@ function shell(content, { crumb = '', tabs = '' } = {}) {
           <a href="#/">Eventos</a>
           ${u.role === 'superadmin' ? '<a href="#/admin">Utilizadores</a>' : ''}
           <a href="#/account">A minha conta</a>
+          ${isStandalone() ? '' : '<button data-install>📲 Instalar app</button>'}
           <hr>
           <button data-logout>Sair</button>
         </div>
@@ -244,8 +245,76 @@ document.addEventListener('click', async (e) => {
   const dd = $('#dd');
   if (m && dd) { dd.classList.toggle('hide'); return; }
   if (dd && !e.target.closest('.dropdown')) dd.classList.add('hide');
+  if (e.target.closest('[data-install]')) { $('#dd')?.classList.add('hide'); return installModal(); }
+  if (e.target.closest('[data-dismissinstall]')) { try { localStorage.setItem('md_noinstall', '1'); } catch { } e.target.closest('.installbar')?.remove(); return; }
   if (e.target.closest('[data-logout]')) { await api('POST', '/api/logout'); state.me = null; stopStream(); go('#/login'); }
 });
+
+// ---------- instalar como app (PWA) ----------
+let deferredPrompt = null;
+window.addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); deferredPrompt = e; });
+window.addEventListener('appinstalled', () => { deferredPrompt = null; toast('MicDesk instalada ✓'); $('.installbar')?.remove(); });
+if ('serviceWorker' in navigator && window.isSecureContext) navigator.serviceWorker.register('/sw.js').catch(() => { });
+function isStandalone() { return window.matchMedia('(display-mode: standalone)').matches || navigator.standalone === true; }
+function device() {
+  const ua = navigator.userAgent;
+  const iPad = /iPad/.test(ua) || (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1);
+  if (iPad) return { os: 'ios', short: 'iPad', name: 'iPad' };
+  if (/iPhone|iPod/.test(ua)) return { os: 'ios', short: 'iPhone', name: 'iPhone' };
+  if (/Android/.test(ua)) return { os: 'android', short: 'telemóvel', name: 'Android' };
+  if (/Macintosh/.test(ua)) return { os: 'mac', short: 'Mac', name: 'Mac' };
+  if (/Windows/.test(ua)) return { os: 'windows', short: 'PC', name: 'Windows' };
+  return { os: 'other', short: 'aparelho', name: 'este aparelho' };
+}
+function browserName() {
+  const ua = navigator.userAgent;
+  if (/Edg\//.test(ua)) return 'edge';
+  if (/CriOS|Chrome\//.test(ua) && !/OPR|SamsungBrowser/.test(ua)) return 'chrome';
+  if (/SamsungBrowser/.test(ua)) return 'samsung';
+  if (/Firefox|FxiOS/.test(ua)) return 'firefox';
+  if (/Safari/.test(ua)) return 'safari';
+  return 'other';
+}
+const SHARE_ICON = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" style="vertical-align:-3px"><path d="M12 3v12M8 7l4-4 4 4"/><path d="M5 11v8a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-8"/></svg>';
+function installModal() {
+  const d = device(), br = browserName();
+  const guides = {
+    ios: { title: 'iPhone / iPad', steps: [
+      'Abre este endereço no <b>Safari</b> (no iOS 16.4+ também funciona no Chrome).',
+      `Carrega no botão <b>Partilhar</b> ${SHARE_ICON} (em baixo no iPhone, em cima no iPad).`,
+      'Desliza e escolhe <b>"Adicionar ao ecrã principal"</b>.',
+      'Carrega em <b>Adicionar</b>. O ícone MicDesk aparece no ecrã principal.'] },
+    android: { title: 'Android', steps: [
+      'Abre este endereço no <b>Chrome</b> (ou Samsung Internet / Edge).',
+      'Carrega em <b>Instalar</b> aqui em cima, ou no menu <b>⋮</b> → <b>"Instalar aplicação"</b>.',
+      'Confirma. A MicDesk fica na gaveta de apps e no ecrã principal.'] },
+    windows: { title: 'Windows', steps: [
+      'Abre este endereço no <b>Edge</b> ou no <b>Chrome</b>.',
+      'Carrega em <b>Instalar</b> aqui em cima, ou no ícone <b>⊕ / 🖥️</b> no fim da barra de endereço.',
+      'A MicDesk fica no menu Iniciar e podes afixá-la na barra de tarefas.'] },
+    mac: { title: 'MacBook / Mac', steps: [
+      '<b>Safari</b> (macOS Sonoma ou mais recente): menu <b>Ficheiro → "Adicionar à Dock"</b>.',
+      '<b>Chrome / Edge</b>: carrega em <b>Instalar</b> aqui em cima, ou no ícone <b>⊕</b> na barra de endereço.',
+      'A MicDesk fica na Dock e no Launchpad, abre em janela própria.'] },
+  };
+  const order = [d.os, ...['ios', 'android', 'windows', 'mac'].filter((k) => k !== d.os)].filter((k) => guides[k]);
+  const section = (k, open) => `<details class="iguide" ${open ? 'open' : ''}><summary>${guides[k].title}${k === d.os ? ' <span class="pill ok">este aparelho</span>' : ''}</summary>
+    <ol>${guides[k].steps.map((x) => `<li>${x}</li>`).join('')}</ol></details>`;
+  const canPrompt = !!deferredPrompt;
+  const f = modal('Instalar MicDesk', `
+    ${!window.isSecureContext ? `<div class="card" style="border-color:var(--warn);margin-bottom:12px"><b style="color:var(--warn)">⚠ Precisa de HTTPS</b><div class="small muted">Para instalar como app, o site tem de ser aberto com um endereço <b>https://</b> (ex: com o Nginx Proxy Manager). Em http:// só dá para usar no browser.</div></div>` : ''}
+    ${canPrompt ? `<button type="button" class="btn primary" id="doinstall" style="width:100%;min-height:56px;font-size:18px;margin-bottom:14px">📲 Instalar agora neste ${d.short}</button>` : ''}
+    ${d.os === 'ios' && br !== 'safari' && br !== 'chrome' ? '<p class="small" style="color:var(--warn)">Abre no Safari para poderes instalar.</p>' : ''}
+    ${br === 'firefox' && d.os !== 'android' && d.os !== 'ios' ? '<p class="small" style="color:var(--warn)">O Firefox no computador não instala apps web — usa o Chrome, Edge ou Safari.</p>' : ''}
+    ${order.map((k, i) => section(k, i === 0)).join('')}
+    <p class="small muted" style="margin-bottom:0">A app instalada é sempre a versão mais recente do teu servidor — não é preciso atualizar nada nos aparelhos.</p>`);
+  $('#doinstall', f)?.addEventListener('click', async () => {
+    deferredPrompt.prompt();
+    const r = await deferredPrompt.userChoice.catch(() => null);
+    deferredPrompt = null; closeModal();
+    if (r && r.outcome === 'accepted') toast('A instalar…');
+  });
+}
 
 // ---------- login ----------
 function renderLogin() {
@@ -255,6 +324,7 @@ function renderLogin() {
     <div class="field"><label>Email</label><input name="email" type="email" autocomplete="username" required></div>
     <div class="field"><label>Password</label><input name="password" type="password" autocomplete="current-password" required></div>
     <button class="btn primary" style="width:100%">Entrar</button>
+    ${isStandalone() ? '' : '<button type="button" class="btn ghost" style="width:100%;margin-top:8px" data-install>📲 Instalar a app neste aparelho</button>'}
   </form></div>`;
   $('#lf').addEventListener('submit', async (e) => {
     e.preventDefault();
@@ -300,7 +370,8 @@ async function renderHome() {
       </div>
     </div>
     <div class="list" style="margin-top:16px">${events.length ? events.map(item).join('') : `<div class="card empty">${state.showArchived ? 'Sem eventos arquivados.' : 'Ainda não há eventos. Cria o primeiro.'}</div>`}</div>`;
-  app.innerHTML = shell(content);
+  let hideBar = isStandalone(); try { hideBar = hideBar || localStorage.getItem('md_noinstall') === '1'; } catch { }
+  app.innerHTML = shell((hideBar ? '' : `<div class="card installbar"><span style="font-size:22px">📲</span><div class="grow"><b>Instala a MicDesk neste ${device().short}</b><div class="small muted">Abre em ecrã inteiro, com ícone próprio, como uma app normal.</div></div><button class="btn sm primary" data-install>Instalar</button><button class="btn sm ghost icon" data-dismissinstall aria-label="Fechar">✕</button></div>`) + content);
   $$('[data-arch]').forEach((b) => b.onclick = () => { state.showArchived = b.dataset.arch === '1'; renderHome(); });
   $('#ownerf')?.addEventListener('change', (e) => { state.ownerFilter = Number(e.target.value) || null; renderHome(); });
   $('#newev')?.addEventListener('click', () => (lim.max && lim.used >= lim.max ? limitModal(lim.max) : newEventModal()));

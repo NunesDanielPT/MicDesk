@@ -324,3 +324,13 @@ td.gair.gfree { background: #1a1213; }
   .mgrid.live .gn { font-size: 15px; }
   .bigtime.sm { font-size: 24px; }
 }
+
+/* instalar app */
+.installbar { display: flex; align-items: center; gap: 12px; margin: 4px 0 14px; border-color: #1d4d3a; background: #10201a; }
+.iguide { border: 1px solid var(--line); border-radius: 12px; margin-bottom: 8px; background: var(--panel2); }
+.iguide summary { cursor: pointer; padding: 12px 14px; font-weight: 600; list-style: none; display: flex; align-items: center; gap: 8px; }
+.iguide summary::-webkit-details-marker { display: none; }
+.iguide summary::before { content: '▸'; color: var(--muted); }
+.iguide[open] summary::before { content: '▾'; }
+.iguide ol { margin: 0; padding: 0 16px 14px 34px; line-height: 1.55; }
+.iguide li { margin-bottom: 6px; }
