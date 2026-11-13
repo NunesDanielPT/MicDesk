@@ -127,6 +127,13 @@ CREATE TABLE IF NOT EXISTS event_members (
 CREATE INDEX IF NOT EXISTS ix_members_user ON event_members(user_id);
 CREATE INDEX IF NOT EXISTS ix_members_email ON event_members(email);
 CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT);
+CREATE TABLE IF NOT EXISTS mic_lists (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  items TEXT NOT NULL DEFAULT '[]',
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
 CREATE TABLE IF NOT EXISTS chat_messages (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   event_id INTEGER NOT NULL REFERENCES events(id) ON DELETE CASCADE,
@@ -190,6 +197,8 @@ CREATE INDEX IF NOT EXISTS ix_slots_block ON slots(block_id);
   if (!scols.includes('miked')) db.exec('ALTER TABLE slots ADD COLUMN miked INTEGER NOT NULL DEFAULT 0');
   const ucols = db.prepare('PRAGMA table_info(users)').all().map((c) => c.name);
   if (!ucols.includes('prefs')) db.exec("ALTER TABLE users ADD COLUMN prefs TEXT DEFAULT ''");
+  if (!ucols.includes('avatar')) db.exec('ALTER TABLE users ADD COLUMN avatar BLOB');
+  if (!ucols.includes('avatar_at')) db.exec('ALTER TABLE users ADD COLUMN avatar_at INTEGER DEFAULT 0');
   if (!cols.includes('console_inputs')) db.exec('ALTER TABLE events ADD COLUMN console_inputs INTEGER DEFAULT 0');
   if (!cols.includes('console_model')) db.exec("ALTER TABLE events ADD COLUMN console_model TEXT DEFAULT ''");
   if (cols.includes('org_id')) {
@@ -372,7 +381,7 @@ function parseCookies(req) {
 function getUser(req) {
   const tok = parseCookies(req).mdsess;
   if (!tok) return null;
-  const row = get(`SELECT u.id, u.email, u.name, u.role, u.active, u.max_events
+  const row = get(`SELECT u.id, u.email, u.name, u.role, u.active, u.max_events, u.avatar_at
     FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.token = ? AND s.expires > ?`, tok, Date.now());
   if (!row || !row.active) return null;
   return row;
@@ -418,7 +427,7 @@ function fullEvent(ev) {
   const byBlock = {};
   for (const sl of slots) (byBlock[sl.block_id] ||= []).push(sl);
   for (const b of blocks) b.slots = byBlock[b.id] || [];
-  const owner = get('SELECT id, name, email FROM users WHERE id = ?', ev.user_id);
+  const owner = get('SELECT id, name, email, avatar_at FROM users WHERE id = ?', ev.user_id);
   const console_ = {
     channels: all('SELECT * FROM console_channels WHERE event_id = ? ORDER BY sort, id', ev.id),
     outputs: all('SELECT * FROM console_outputs WHERE event_id = ? ORDER BY sort, id', ev.id),
@@ -485,6 +494,84 @@ route('POST', '/api/logout', (req, res) => {
 }, { public: true });
 
 route('GET', '/api/me', (req, res, b, p, u) => ({ user: u, types: MIC_TYPES, colors: DEFAULT_COLORS }));
+
+// perfil: nome e email (o email exige a password atual)
+route('PUT', '/api/me', (req, res, body, p, u) => {
+  const row = get('SELECT * FROM users WHERE id = ?', u.id);
+  const name = s(body.name ?? row.name, 120) || row.name;
+  let email = row.email;
+  if (body.email != null && s(body.email, 200).toLowerCase() !== row.email.toLowerCase()) {
+    email = s(body.email, 200).toLowerCase();
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw bad('Email inválido');
+    if (!checkPass(String(body.current || ''), row.pass)) throw bad('Para mudar o email escreve a tua password atual');
+    if (get('SELECT id FROM users WHERE email = ? AND id != ?', email, u.id)) throw bad('Já existe uma conta com esse email');
+  }
+  run('UPDATE users SET name = ?, email = ? WHERE id = ?', name, email, u.id);
+  if (email !== row.email) { run('UPDATE event_members SET email = ? WHERE user_id = ?', email, u.id); claimInvites({ id: u.id, email }); }
+  return { ok: true };
+});
+// fotografia de perfil (o browser já a envia reduzida, em JPEG)
+route('PUT', '/api/me/avatar', (req, res, body, p, u) => {
+  const m = String(body.data || '').match(/^data:image\/(jpeg|png|webp);base64,([A-Za-z0-9+/=]+)$/);
+  if (!m) throw bad('Imagem inválida');
+  const buf = Buffer.from(m[2], 'base64');
+  if (buf.length > 600000) throw bad('Imagem demasiado grande');
+  run('UPDATE users SET avatar = ?, avatar_at = ? WHERE id = ?', buf, Date.now(), u.id);
+  return { ok: true, avatar_at: get('SELECT avatar_at FROM users WHERE id = ?', u.id).avatar_at };
+});
+route('DELETE', '/api/me/avatar', (req, res, b, p, u) => { run('UPDATE users SET avatar = NULL, avatar_at = 0 WHERE id = ?', u.id); return { ok: true }; });
+route('GET', '/api/avatar/:id', (req, res, b, p) => {
+  const r = get('SELECT avatar FROM users WHERE id = ?', p.id);
+  if (!r || !r.avatar) throw notFound();
+  const buf = Buffer.from(r.avatar);
+  const type = buf[0] === 0x89 ? 'image/png' : buf[0] === 0x52 ? 'image/webp' : 'image/jpeg';
+  res.writeHead(200, { 'Content-Type': type, 'Cache-Control': 'private, max-age=31536000, immutable', 'Content-Length': buf.length });
+  res.end(buf);
+}, { stream: true });
+
+// listas de micros do utilizador (para carregar em qualquer evento)
+function micItems(arr) {
+  return (Array.isArray(arr) ? arr : []).slice(0, 200).map((m) => {
+    const f = micFields(m || {});
+    return { label: f.label, type: f.type, color: f.color, person: f.person, channel: f.channel, frequency: f.frequency, notes: f.notes };
+  }).filter((m) => m.label);
+}
+route('GET', '/api/mic-lists', (req, res, b, p, u) => all('SELECT id, name, items FROM mic_lists WHERE user_id = ? ORDER BY name COLLATE NOCASE', u.id).map((r) => ({ ...r, items: JSON.parse(r.items) })));
+route('POST', '/api/mic-lists', (req, res, body, p, u) => {
+  const name = s(body.name, 80); if (!name) throw bad('Dá um nome à lista');
+  const items = body.from_event ? all('SELECT label, type, color, person, channel, frequency, notes FROM mics WHERE event_id = ? ORDER BY sort, id', eventFor(u, body.from_event).id) : micItems(body.items);
+  if (!items.length) throw bad('A lista não tem micros');
+  const r = run('INSERT INTO mic_lists (user_id, name, items) VALUES (?,?,?)', u.id, name, JSON.stringify(items));
+  return { id: Number(r.lastInsertRowid), count: items.length };
+});
+route('PUT', '/api/mic-lists/:id', (req, res, body, p, u) => {
+  const l = get('SELECT * FROM mic_lists WHERE id = ? AND user_id = ?', p.id, u.id); if (!l) throw notFound();
+  run('UPDATE mic_lists SET name = ?, items = ? WHERE id = ?', s(body.name ?? l.name, 80) || l.name, body.items ? JSON.stringify(micItems(body.items)) : l.items, l.id);
+  return { ok: true };
+});
+route('DELETE', '/api/mic-lists/:id', (req, res, b, p, u) => { run('DELETE FROM mic_lists WHERE id = ? AND user_id = ?', p.id, u.id); return { ok: true }; });
+// juntar vários micros a um evento sem substituir os que já existem; nomes repetidos ganham " (1)", " (2)"…
+route('POST', '/api/events/:id/mics/bulk', (req, res, body, p, u) => {
+  const ev = eventFor(u, p.id);
+  const items = micItems(body.items);
+  if (!items.length) throw bad('Nada para adicionar');
+  const added = tx(() => {
+    const taken = new Set(all('SELECT label FROM mics WHERE event_id = ?', ev.id).map((r) => r.label.toLowerCase()));
+    let sort = get('SELECT COALESCE(MAX(sort),0) AS m FROM mics WHERE event_id = ?', ev.id).m;
+    const out = [];
+    for (const it of items) {
+      let label = it.label; let n = 1;
+      while (taken.has(label.toLowerCase())) label = `${it.label} (${n++})`;
+      taken.add(label.toLowerCase());
+      run("INSERT INTO mics (event_id, label, type, color, channel, frequency, person, battery, battery_at, status, notes, sort) VALUES (?,?,?,?,?,?,?,3,datetime('now'),'ok',?,?)",
+        ev.id, label, it.type, it.color, it.channel || '', it.frequency || '', it.person || '', it.notes || '', ++sort);
+      out.push(label);
+    }
+    return out;
+  });
+  changed(u, ev.id, `carregou ${added.length} micros${body.list_name ? ' da lista "' + s(body.list_name, 80) + '"' : ''}: ${added.join(', ')}`);
+  return { added };
+});
 
 route('GET', '/api/me/prefs', (req, res, b, p, u) => { const r = get('SELECT prefs FROM users WHERE id = ?', u.id); try { return JSON.parse(r.prefs || '{}'); } catch { return {}; } });
 route('PUT', '/api/me/prefs', (req, res, body, p, u) => {
@@ -583,7 +670,7 @@ route('GET', '/api/events/:id', (req, res, b, p, u) => {
   return { ...fullEvent(ev), access: { owner: ev.user_id === u.id, manage: canManage(u, ev) }, members: membersOf(ev.id) };
 });
 function membersOf(evId) {
-  return all(`SELECT m.id, m.email, m.user_id, m.created_at, us.name FROM event_members m LEFT JOIN users us ON us.id = m.user_id
+  return all(`SELECT m.id, m.email, m.user_id, m.created_at, us.name, us.avatar_at FROM event_members m LEFT JOIN users us ON us.id = m.user_id
     WHERE m.event_id = ? ORDER BY m.id`, evId).map((m) => ({ ...m, pending: !m.user_id }));
 }
 route('POST', '/api/events/:id/members', (req, res, body, p, u) => {
@@ -1070,7 +1157,7 @@ function participantsOf(evId) {
   const ids = new Set([ev.user_id]);
   for (const r of all('SELECT user_id FROM event_members WHERE event_id = ? AND user_id IS NOT NULL', evId)) ids.add(r.user_id);
   for (const r of all('SELECT user_id FROM chat_reads WHERE event_id = ?', evId)) ids.add(r.user_id);
-  return all(`SELECT id, name, email FROM users WHERE active = 1 AND id IN (${[...ids].map(Number).join(',') || 0}) ORDER BY name COLLATE NOCASE`);
+  return all(`SELECT id, name, email, avatar_at FROM users WHERE active = 1 AND id IN (${[...ids].map(Number).join(',') || 0}) ORDER BY name COLLATE NOCASE`);
 }
 function chatRow(m) { let meta = null; try { meta = m.meta ? JSON.parse(m.meta) : null; } catch { } return { ...m, meta }; }
 function postChat(evId, u, { kind = 'text', text = '', meta = null, target = null } = {}) {

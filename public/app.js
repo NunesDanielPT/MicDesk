@@ -147,7 +147,7 @@ async function boot() {
     const me = await fetch('/api/me', { credentials: 'same-origin' });
     if (me.ok) { const d = await me.json(); state.me = d.user; state.types = d.types; state.colors = d.colors; }
   } catch { }
-  if (state.me) startUserStream();
+  if (state.me) { startUserStream(); loadServerTheme(); }
   render();
 }
 
@@ -178,8 +178,9 @@ async function renderInner() {
   }
   stopStream(); state.ev = null; state.evId = null;
   if (parts[0] === 'admin') return renderAdmin();
-  if (parts[0] === 'account') return renderAccount();
-  if (parts[0] === 'display') return renderDisplay();
+  if (parts[0] === 'account') return go('#/settings/perfil');
+  if (parts[0] === 'display') return go('#/settings/ecra');
+  if (parts[0] === 'settings') return renderSettings(parts[1] || 'perfil');
   if (parts[0] === 'integrations') return renderIntegrations();
   return renderHome();
 }
@@ -238,14 +239,13 @@ function shell(content, { crumb = '', tabs = '', wide = false } = {}) {
         ${crumb ? `<span class="crumb">${crumb}</span>` : ''}
       </div>
       <div class="menu">
-        <button class="btn sm" data-menu>${esc((u.name || u.email).split(' ')[0])} ▾</button>
+        <button class="btn sm menubtn" data-menu>${avatarHtml(u, 26)}<span class="hide-sm">${esc((u.name || u.email).split(' ')[0])}</span> ▾</button>
         <div class="dropdown hide" id="dd">
           <div class="small muted" style="padding:8px 12px">${esc(u.email)}<br>${ROLES[u.role]}</div>
           <hr>
           <a href="#/">Eventos</a>
           ${u.role === 'superadmin' ? '<a href="#/admin">Utilizadores</a><a href="#/integrations">🔌 Integrações <span class="pill info" style="font-size:10px">beta</span></a>' : ''}
-          <a href="#/account">A minha conta</a>
-          <a href="#/display">🖥 Ecrã e experiência</a>
+          <a href="#/settings/perfil">⚙ Definições</a>
           ${isStandalone() ? '' : '<button data-install>📲 Instalar app</button>'}
           <hr>
           <button data-logout>Sair</button>
@@ -448,7 +448,7 @@ async function renderLogin() {
       else await api('POST', '/api/login', formData(e.target));
       const d = await api('GET', '/api/me');
       state.me = d.user; state.types = d.types; state.colors = d.colors; state.authMode = 'login';
-      startUserStream();
+      startUserStream(); loadServerTheme();
       if (mode === 'signup') toast(shared ? `Bem-vindo! Já tens ${shared} evento(s) partilhado(s) contigo.` : 'Conta criada. Bem-vindo à MicDesk!');
       go(location.hash.startsWith('#/e/') ? location.hash : '#/');
     } catch (err) { toast(err.message, true); btn.disabled = false; }
@@ -968,9 +968,9 @@ function viewMics() {
         <button data-ft="low" class="${ft === 'low' ? 'on' : ''}">⚠ Pilhas baixas</button>
       </div>
       <span class="grow"></span>
-      ${w ? `<button class="btn" data-allnew>🔋 Todos com pilhas novas</button><button class="btn primary" data-addmic>+ Micro</button>` : ''}
+      ${w ? `<button class="btn" data-loadlists>📋 Carregar lista</button>${mics.length ? '<button class="btn ghost" data-savelist title="Guardar estes micros como lista">💾</button>' : ''}<button class="btn" data-allnew>🔋 Todos com pilhas novas</button><button class="btn primary" data-addmic>+ Micro</button>` : ''}
     </div>
-    ${list.length ? `<div class="micgrid">${list.map(card).join('')}</div>` : `<div class="card empty">${mics.length ? 'Nenhum micro neste filtro.' : 'Ainda não há micros. Adiciona o primeiro.'}</div>`}`;
+    ${list.length ? `<div class="micgrid">${list.map(card).join('')}</div>` : `<div class="card empty">${mics.length ? 'Nenhum micro neste filtro.' : 'Ainda não há micros. Adiciona o primeiro ou carrega uma lista (📋).'}</div>`}`;
 }
 
 function micModal(m) {
@@ -1121,7 +1121,7 @@ function viewLive() {
   const { occ, prevHolder } = occupancy();
   const swaps = next ? next.slots.filter((sl) => { const ph = prevHolder[next.id]?.[sl.mic_id]; const m = mics.find((x) => x.id === sl.mic_id); return sl.mic_id && ph && !sameName(ph.speaker, sl.speaker) && !['pulpito', 'ambiente'].includes(m?.type); }).length : 0;
   return `<div class="livebar">
-      <div><div class="clock" id="clock">${nowHM()}</div><div class="muted small">${esc(event.name)} · modo ${AIR_MODES[event.air_mode]}</div></div>
+      <div><div class="clock" id="clock">${nowHM()}</div><div class="muted small">${esc(event.name)} · modo ${AIR_MODES[event.air_mode]} · <a href="#/settings/ecra" class="cfglink" title="Configurar o ecrã">⚙ ecrã</a></div></div>
       <div class="livesum">
         ${cur ? `<div><span class="label-up" style="color:var(--air)">No ar</span><b class="bigtime sm">${esc(cur.start_time || '--:--')}</b></div>` : '<div><span class="label-up">No ar</span><b class="muted">—</b></div>'}
         ${next ? `<div><span class="label-up">A seguir</span><b class="bigtime sm">${esc(next.start_time || '--:--')}</b></div>` : ''}
@@ -1136,13 +1136,6 @@ function viewLive() {
       </div>` : ''}
     </div>
     ${timerPanel()}
-    ${tipDisplay()}
-    <div class="gridtools"><span class="small muted">Ecrã: <b>${esc(vp.label || 'Personalizado')}</b></span><span class="grow"></span>
-      <button class="btn sm" data-gz="-1" title="Mais pequeno">A−</button><button class="btn sm" data-gz="1" title="Maior">A+</button>
-      <button class="btn sm ${vp.showAll ? 'primary' : ''}" data-gall title="Mostrar o evento todo e deslizar para trás/frente">⇤ Desde o início</button>
-      <button class="btn sm" data-gw="-1" title="Blocos mais estreitos">◂▸ −</button><button class="btn sm" data-gw="1" title="Blocos mais largos">◂ ▸ +</button>
-      <button class="btn sm ${vp.fit && !vp.colw ? 'primary' : ''}" data-gfit title="Ajustar colunas à largura do ecrã">⤢ Ajustar ao ecrã</button>
-      <a class="btn sm" href="#/display">⚙ Configurar</a></div>
     ${blocks.length ? `<div class="card gridwrap live">${micGrid(cols, { airId: a.currentId, live: true })}</div>
     <p class="small muted">Mostra os 2 blocos anteriores, o que está ON AIR e os seguintes. <span class="lg-warn">recolher de</span> = tirar o micro a quem está no ar agora para dar ao próximo. Toca num nome na coluna ON AIR para marcar como ✓ feito; noutra coluna, para marcar como <b>micado</b>.</p>`
     : '<div class="card empty">Sem alinhamento.</div>'}`;
@@ -1312,14 +1305,14 @@ function teamCard() {
   const { members = [], owner, access = {} } = state.ev;
   const me = state.me;
   const row = (m) => `<div class="mrow">
-      <div class="mav">${esc((m.name || m.email).trim()[0] || '?').toUpperCase()}</div>
+      ${avatarHtml({ id: m.user_id, name: m.name || m.email, avatar_at: m.avatar_at }, 36)}
       <div class="grow" style="min-width:0"><b>${esc(m.name || m.email)}</b><div class="small muted">${esc(m.email)}${m.pending ? ' · <span style="color:var(--warn)">convite pendente — ainda sem conta</span>' : ''}</div></div>
       ${access.manage || m.user_id === me.id || String(m.email).toLowerCase() === String(me.email).toLowerCase()
     ? `<button class="btn sm ghost" data-rmmember="${m.id}">${m.user_id === me.id ? 'Sair' : 'Remover'}</button>` : ''}
     </div>`;
   return `<div class="card team">
     <h2>👥 Equipa do evento</h2>
-    <div class="mrow"><div class="mav own">${esc(((owner?.name || owner?.email || '?').trim()[0] || '?').toUpperCase())}</div>
+    <div class="mrow">${avatarHtml(owner, 36)}
       <div class="grow"><b>${esc(owner?.name || owner?.email || '')}</b><div class="small muted">${esc(owner?.email || '')} · dono do evento</div></div></div>
     ${members.map(row).join('')}
     ${access.manage ? `<form id="addmember" class="row" style="margin-top:12px">
@@ -1512,6 +1505,10 @@ function bindEvent(tab) {
       await act(() => api('POST', `/api/events/${state.evId}/routes`, { channel_id: c, output_id: o, on: onNow })).catch(() => el.classList.toggle('on', !onNow));
       return;
     }
+    if (t('[data-loadlists]')) return loadMicListModal();
+    if (t('[data-savelist]')) return modal('Guardar estes micros como lista', `<div class="field"><label>Nome da lista</label><input name="lname" value="Micros de ${esc(state.ev.event.name)}" required></div><p class="small muted">Fica nas tuas listas (⚙ Definições → Listas de micros) para carregares noutros eventos.</p>`, {
+      onSubmit: async (d) => { const r = await api('POST', '/api/mic-lists', { name: d.lname, from_event: state.evId }); toast(`Lista guardada com ${r.count} micros`); },
+    });
     if (t('[data-addmic]')) return micModal({});
     if ((el = t('[data-editmic]'))) return micModal(state.ev.mics.find((m) => m.id === Number(el.dataset.editmic)));
     if ((el = t('[data-batt]'))) {
@@ -1752,14 +1749,13 @@ function previewHtml(v) {
 }
 
 async function renderDisplay() {
-  app.innerHTML = shell('<div class="empty">A carregar…</div>', { crumb: 'Ecrã e experiência' });
+  if (!$('.setnav')) app.innerHTML = settingsShell('ecra', '<div class="empty">A carregar…</div>');
   const ups = await loadUserPresets();
   const v = viewPrefs();
   const card = (p, mine) => `<button class="pcard ${v.presetId === (mine ? 'u:' : '') + p.id ? 'on' : ''}" data-preset="${mine ? 'u:' : ''}${esc(p.id)}">
       <b>${esc(p.label)}</b><small>${esc(p.desc || `${p.colw ? 'colunas ' + p.colw + ' px' : p.fit ? 'ajusta ao ecrã' : 'largura fixa'} · nomes ${p.name || 'auto'} · ${p.before}+${p.after} blocos`)}</small>
       ${mine ? `<span class="pdel" data-delpreset="${esc(p.id)}" title="Apagar">✕</span>` : ''}</button>`;
-  app.innerHTML = shell(`
-    <h1 style="margin-top:14px">🖥 Ecrã e experiência</h1>
+  app.innerHTML = settingsShell('ecra', `
     <p class="muted" style="margin-top:0">Escolhe como o <b>Ao vivo</b> aparece <b>neste aparelho</b> (o PC, o iPad e o telemóvel podem ter definições diferentes).</p>
     <div class="label-up">Predefinições da app</div>
     <div class="pgridp">${VIEW_PRESETS.map((p) => card(p, false)).join('')}</div>
@@ -1778,7 +1774,7 @@ async function renderDisplay() {
         <div class="row" style="flex-wrap:wrap;gap:8px;margin-top:6px"><button type="button" class="btn" data-savepreset>💾 Guardar como predefinição</button><a class="btn primary" href="${state.lastEv ? `#/e/${state.lastEv.event.id}/live` : '#/'}">Ver no Ao vivo</a></div>
       </form>
       <div id="vprev">${previewHtml(v)}</div>
-    </div>`, { crumb: 'Ecrã e experiência' });
+    </div>`);
   try { localStorage.setItem('md_tip_display', '1'); } catch { }
   applyGridPrefs();
   const cur = () => {
@@ -2050,7 +2046,7 @@ function drawChat(scroll) {
     const chips = m.meta?.mics ? `<div class="mchips">${m.meta.mics.map((x) => `<span class="chip" style="background:${esc(x.color)};color:${contrastText(x.color)}">${esc(x.label)}</span>`).join('')}</div>` : '';
     const call = m.kind === 'call' ? `<div class="mcall">📣 Chamada para <b>${esc(m.meta?.target_name || 'Todos')}</b></div>` : '';
     return `${dh}<div class="msg ${mine ? 'mine' : ''} k-${m.kind}">
-      ${mine ? '' : `<div class="mav">${esc((m.user_name || '?').trim()[0] || '?').toUpperCase()}</div>`}
+      ${mine ? '' : avatarHtml(state.chat.participants.find((p) => p.id === m.user_id) || { id: m.user_id, name: m.user_name }, 32)}
       <div class="bubble">${mine ? '' : `<div class="mname">${esc(m.user_name)}</div>`}${call}<div class="mtext">${esc(m.text)}</div>${chips}
         <div class="mmeta">${time} ${status}</div></div></div>`;
   }).join('') : '<div class="empty">Ainda não há mensagens. Diz olá à equipa 👋<br><span class="small">Todas as pessoas deste evento recebem as mensagens.</span></div>';
@@ -2088,6 +2084,235 @@ function callModal() {
   });
   $('[name=target]', f)?.setAttribute('checked', 'checked');
   f.addEventListener('click', (e) => { const p = e.target.closest('[data-cpreset]'); if (p) $('[name=text]', f).value = p.dataset.cpreset; });
+}
+
+// ---------- fotografia de perfil ----------
+function avatarHtml(u, size = 32) {
+  if (!u) return '';
+  const id = u.id ?? u.user_id; const name = (u.name || u.email || u.user_name || '?').trim();
+  const st = `width:${size}px;height:${size}px;font-size:${Math.round(size * 0.42)}px`;
+  return u.avatar_at ? `<img class="avt" src="/api/avatar/${id}?v=${u.avatar_at}" alt="" style="${st}">` : `<span class="mav avt" style="${st}">${esc(name[0] || '?').toUpperCase()}</span>`;
+}
+function pickImage() {
+  return new Promise((resolve) => {
+    const inp = document.createElement('input'); inp.type = 'file'; inp.accept = 'image/*';
+    inp.onchange = () => {
+      const f = inp.files?.[0]; if (!f) return resolve(null);
+      const img = new Image(); const url = URL.createObjectURL(f);
+      img.onload = () => {
+        const S = 320; const c = document.createElement('canvas'); c.width = c.height = S;
+        const k = Math.max(S / img.width, S / img.height); const w = img.width * k, h = img.height * k;
+        c.getContext('2d').drawImage(img, (S - w) / 2, (S - h) / 2, w, h); URL.revokeObjectURL(url);
+        resolve(c.toDataURL('image/jpeg', 0.85));
+      };
+      img.onerror = () => { toast('Não consegui ler essa imagem', true); resolve(null); };
+      img.src = url;
+    };
+    inp.click();
+  });
+}
+
+// ---------- temas de cores ----------
+const THEME_VARS = [
+  ['bg', 'Fundo'], ['panel', 'Cartões'], ['panel2', 'Cartões (2.º nível) e barras'], ['line', 'Linhas e contornos'],
+  ['text', 'Texto'], ['muted', 'Texto secundário'], ['accent', 'Cor principal (botões, livre, micado)'], ['accent-ink', 'Texto sobre a cor principal'],
+  ['air', 'ON AIR / chamadas'], ['warn', 'Avisos (recolher, pilhas fracas)'], ['danger', 'Perigo (avaria, repetido)'], ['info', 'Informação (trocas, chat)'],
+];
+const THEME_PRESETS = [
+  { id: 'micdesk', name: 'MicDesk (original)', v: { bg: '#0e0f11', panel: '#17191c', panel2: '#1f2226', line: '#2c3036', text: '#e9eaec', muted: '#9097a0', accent: '#34c38f', 'accent-ink': '#062619', air: '#e53935', warn: '#f0b429', danger: '#ef5350', info: '#4ea1ff' } },
+  { id: 'regie', name: 'Régie azul', v: { bg: '#0b1220', panel: '#111a2e', panel2: '#18233b', line: '#263453', text: '#e6edf8', muted: '#8b9bb8', accent: '#4ea1ff', 'accent-ink': '#04162c', air: '#ff4d4f', warn: '#f6c343', danger: '#ff6b6b', info: '#7cc7ff' } },
+  { id: 'ambar', name: 'Âmbar de palco', v: { bg: '#120e08', panel: '#1c160d', panel2: '#251d12', line: '#3a2e1c', text: '#f3ead9', muted: '#b3a184', accent: '#f0a020', 'accent-ink': '#2a1800', air: '#e5392f', warn: '#ffd166', danger: '#ff6b5b', info: '#6fb6ff' } },
+  { id: 'neon', name: 'Roxo neon', v: { bg: '#0f0b17', panel: '#181224', panel2: '#211931', line: '#34284b', text: '#eee8fb', muted: '#a197b8', accent: '#b26bff', 'accent-ink': '#1c0533', air: '#ff3d71', warn: '#ffc857', danger: '#ff5c7a', info: '#5cc8ff' } },
+  { id: 'floresta', name: 'Floresta', v: { bg: '#0b120e', panel: '#121c16', panel2: '#18251d', line: '#26392d', text: '#e4efe7', muted: '#8fa596', accent: '#7bd389', 'accent-ink': '#082010', air: '#e4572e', warn: '#f2c14e', danger: '#ef6461', info: '#63b4d1' } },
+  { id: 'rosa', name: 'Grafite e rosa', v: { bg: '#121214', panel: '#1b1b1f', panel2: '#242429', line: '#36363d', text: '#ececf1', muted: '#9a9aa6', accent: '#ff5c8a', 'accent-ink': '#2b0010', air: '#ff3b30', warn: '#ffcc00', danger: '#ff6b6b', info: '#64d2ff' } },
+  { id: 'oceano', name: 'Oceano', v: { bg: '#071417', panel: '#0d1f24', panel2: '#132a30', line: '#1f3f47', text: '#e2f3f5', muted: '#86a7ad', accent: '#2ec4b6', 'accent-ink': '#02201d', air: '#ff5a5f', warn: '#ffbf46', danger: '#ff6f61', info: '#5fa8ff' } },
+  { id: 'contraste', name: 'Alto contraste', v: { bg: '#000000', panel: '#0d0d0d', panel2: '#1a1a1a', line: '#555555', text: '#ffffff', muted: '#cfcfcf', accent: '#00e676', 'accent-ink': '#000000', air: '#ff1744', warn: '#ffea00', danger: '#ff5252', info: '#40c4ff' } },
+];
+function applyTheme(v) {
+  const r = document.documentElement;
+  for (const [k] of THEME_VARS) { if (v && v[k]) r.style.setProperty('--' + k, v[k]); else r.style.removeProperty('--' + k); }
+  $('meta[name=theme-color]')?.setAttribute('content', (v && v.bg) || '#0e0f11');
+}
+function currentTheme() { const t = {}; const cs = getComputedStyle(document.documentElement); for (const [k] of THEME_VARS) t[k] = cs.getPropertyValue('--' + k).trim(); return t; }
+// tema aleatório escuro e harmonioso (gerado a partir de uma cor base)
+function randomTheme() {
+  const h = Math.floor(Math.random() * 360), h2 = (h + 150 + Math.floor(Math.random() * 60)) % 360;
+  const hsl = (hh, ss, ll) => { ss /= 100; ll /= 100; const k = (n) => (n + hh / 30) % 12; const a = ss * Math.min(ll, 1 - ll); const f = (n) => ll - a * Math.max(-1, Math.min(k(n) - 3, Math.min(9 - k(n), 1))); return '#' + [f(0), f(8), f(4)].map((x) => Math.round(x * 255).toString(16).padStart(2, '0')).join(''); };
+  return { bg: hsl(h, 25, 6), panel: hsl(h, 22, 10), panel2: hsl(h, 20, 14), line: hsl(h, 18, 22), text: hsl(h, 20, 93), muted: hsl(h, 12, 62),
+    accent: hsl(h2, 65, 58), 'accent-ink': hsl(h2, 70, 10), air: hsl(2, 80, 56), warn: hsl(43, 90, 58), danger: hsl(358, 85, 64), info: hsl(210, 85, 64) };
+}
+try { const t = JSON.parse(localStorage.getItem('md_theme') || 'null'); if (t) applyTheme(t); } catch { }
+async function loadServerTheme() {
+  try { const p = await api('GET', '/api/me/prefs'); if (p.theme) { applyTheme(p.theme); localStorage.setItem('md_theme', JSON.stringify(p.theme)); } state.userThemes = p.themes || []; } catch { }
+}
+async function saveThemePrefs(patch) { const p = await api('GET', '/api/me/prefs').catch(() => ({})); Object.assign(p, patch); await api('PUT', '/api/me/prefs', p); }
+
+// ---------- listas de micros ----------
+const MIC_LIST_PRESETS = (() => {
+  const C = ['#3fa67a', '#5a8a3c', '#8f8a2c', '#a8740a', '#a85a12', '#a04a14', '#9a3518', '#8f1f1f', '#2d6fa8', '#6a4aa8', '#a84a8a', '#4a8a8f'];
+  const L = (arr) => arr.map(([label, type], i) => ({ label, type, color: C[i % C.length] }));
+  return [
+    { id: 'p-base', name: 'Base 10 (Head, Púlpito, 4 mão, 4 lapela)', items: L([['Head', 'headset'], ['Púlpito', 'pulpito'], ['1', 'mao'], ['2', 'mao'], ['3', 'mao'], ['4', 'mao'], ['5', 'lapela'], ['6', 'lapela'], ['7', 'lapela'], ['8', 'lapela']]) },
+    { id: 'p-mao4', name: '4 micros de mão', items: L([['Mão 1', 'mao'], ['Mão 2', 'mao'], ['Mão 3', 'mao'], ['Mão 4', 'mao']]) },
+    { id: 'p-lap8', name: '8 lapelas', items: L(Array.from({ length: 8 }, (_, i) => [`Lapela ${i + 1}`, 'lapela'])) },
+    { id: 'p-head4', name: '4 headsets', items: L(Array.from({ length: 4 }, (_, i) => [`Head ${i + 1}`, 'headset'])) },
+    { id: 'p-conf', name: 'Conferência (púlpito, 2 mão, 6 lapela, ambiente)', items: L([['Púlpito', 'pulpito'], ['Mão 1', 'mao'], ['Mão 2', 'mao'], ['Lapela 1', 'lapela'], ['Lapela 2', 'lapela'], ['Lapela 3', 'lapela'], ['Lapela 4', 'lapela'], ['Lapela 5', 'lapela'], ['Lapela 6', 'lapela'], ['Ambiente', 'ambiente']]) },
+    { id: 'p-banda', name: 'Banda (4 vozes + bateria e instrumentos)', items: L([['Voz 1', 'mao'], ['Voz 2', 'mao'], ['Voz 3', 'mao'], ['Voz 4', 'mao'], ['Kick', 'instrumento'], ['Snare', 'instrumento'], ['OH L', 'instrumento'], ['OH R', 'instrumento'], ['Baixo', 'instrumento'], ['Guitarra', 'instrumento'], ['Teclas', 'instrumento']]) },
+  ];
+})();
+const listChips = (items, max = 14) => items.slice(0, max).map((m) => `<span class="chip" style="background:${esc(m.color)};color:${contrastText(m.color)}">${esc(m.label)}</span>`).join('') + (items.length > max ? ` <span class="muted small">+${items.length - max}</span>` : '');
+async function loadMicListModal() {
+  const mine = await api('GET', '/api/mic-lists').catch(() => []);
+  const card = (l, mine) => `<div class="mlist"><div class="row" style="justify-content:space-between;gap:8px"><b>${esc(l.name)}</b><span class="small muted">${l.items.length} micros${mine ? ' · minha' : ''}</span></div>
+      <div class="mlchips">${listChips(l.items)}</div>
+      <button type="button" class="btn sm primary" data-loadlist="${mine ? 'u' : 'p'}:${l.id}">+ Adicionar estes micros</button></div>`;
+  const f = modal('📋 Carregar lista de micros', `
+    <p class="small muted" style="margin-top:0">Os micros da lista são <b>acrescentados</b> aos que já existem — nada é substituído. Se um nome já existir, o novo fica com (1), (2)… a seguir.</p>
+    ${mine.length ? `<div class="label-up">As minhas listas</div><div class="mlgrid">${mine.map((l) => card(l, true)).join('')}</div>` : ''}
+    <div class="label-up" style="margin-top:10px">Listas da app</div><div class="mlgrid">${MIC_LIST_PRESETS.map((l) => card(l, false)).join('')}</div>
+    <p class="small muted">Cria e organiza as tuas listas em <a href="#/settings/micros">⚙ Definições → Listas de micros</a>.</p>`, { wide: true });
+  f.addEventListener('click', async (e) => {
+    const b = e.target.closest('[data-loadlist]'); if (!b) return;
+    const [kind, id] = b.dataset.loadlist.split(':');
+    const l = kind === 'u' ? mine.find((x) => String(x.id) === id) : MIC_LIST_PRESETS.find((x) => x.id === id);
+    b.disabled = true;
+    const r = await act(() => api('POST', `/api/events/${state.evId}/mics/bulk`, { items: l.items, list_name: l.name }));
+    closeModal(); toast(`${r.added.length} micros adicionados: ${r.added.slice(0, 6).join(', ')}${r.added.length > 6 ? '…' : ''}`); scheduleReload();
+  });
+}
+function micListEditor(list, onSaved) {
+  const items = list?.items?.length ? list.items.map((x) => ({ ...x })) : [{ label: '1', type: 'mao', color: state.colors[0] || '#3fa67a' }];
+  const row = (m, i) => `<div class="row mle" data-i="${i}"><input name="label" value="${esc(m.label)}" placeholder="Nome / nº" class="grow">
+      <select name="type" style="width:140px">${Object.entries(TYPES).map(([k, v]) => `<option value="${k}" ${k === m.type ? 'selected' : ''}>${v}</option>`).join('')}</select>
+      <input type="color" name="color" value="${esc(m.color || '#3fa67a')}" style="width:46px;padding:2px;min-height:40px">
+      <button type="button" class="btn sm icon ghost" data-rmrow>✕</button></div>`;
+  const f = modal(list?.id ? 'Editar lista' : 'Nova lista de micros', `
+    <div class="field"><label>Nome da lista</label><input name="lname" value="${esc(list?.name || '')}" required placeholder="Ex: Kit conferência CCB"></div>
+    <label>Micros</label><div id="mlrows">${items.map(row).join('')}</div>
+    <button type="button" class="btn sm" id="mladd">+ micro</button>`, {
+    wide: true, submitLabel: 'Guardar lista',
+    onSubmit: async (d, form) => {
+      const its = $$('.mle', form).map((r) => ({ label: $('[name=label]', r).value.trim(), type: $('[name=type]', r).value, color: $('[name=color]', r).value })).filter((x) => x.label);
+      if (list?.id) await api('PUT', `/api/mic-lists/${list.id}`, { name: d.lname, items: its }); else await api('POST', '/api/mic-lists', { name: d.lname, items: its });
+      toast('Lista guardada'); onSaved?.();
+    },
+  });
+  $('#mladd', f).onclick = () => {
+    const n = $$('.mle', f).length; const prev = $$('.mle', f).pop();
+    const lab = prev ? $('[name=label]', prev).value : ''; const next = /^\d+$/.test(lab) ? String(Number(lab) + 1) : lab.replace(/(\d+)$/, (x) => String(Number(x) + 1));
+    $('#mlrows', f).insertAdjacentHTML('beforeend', row({ label: next && next !== lab ? next : '', type: prev ? $('[name=type]', prev).value : 'mao', color: state.colors[n % state.colors.length] }, n));
+    $$('.mle input[name=label]', f).pop().focus();
+  };
+  f.addEventListener('click', (e) => { const r = e.target.closest('[data-rmrow]'); if (r) r.closest('.mle').remove(); });
+}
+
+// ---------- página de definições ----------
+const SET_TABS = [['perfil', '👤 Perfil'], ['ecra', '🖥 Ecrã'], ['micros', '📋 Listas de micros'], ['cores', '🎨 Cores']];
+function settingsShell(sec, html) {
+  return shell(`<h1 style="margin-top:14px">⚙ Definições</h1>
+    <nav class="setnav">${SET_TABS.map(([k, l]) => `<a href="#/settings/${k}" class="${sec === k ? 'on' : ''}">${l}</a>`).join('')}</nav>${html}`, { crumb: 'Definições' });
+}
+async function renderSettings(sec) {
+  if (sec === 'ecra') return renderDisplay();
+  if (sec === 'micros') return renderSetMics();
+  if (sec === 'cores') return renderSetColors();
+  return renderSetProfile();
+}
+function renderSetProfile() {
+  const u = state.me;
+  app.innerHTML = settingsShell('perfil', `<div class="grid2" style="align-items:start">
+    <div class="card"><h2>Fotografia</h2>
+      <div class="row" style="gap:18px;flex-wrap:wrap">${avatarHtml(u, 112)}
+        <div style="display:grid;gap:8px"><button class="btn primary" data-avatar>📷 ${u.avatar_at ? 'Mudar fotografia' : 'Adicionar fotografia'}</button>
+        ${u.avatar_at ? '<button class="btn ghost danger" data-avatardel>Remover</button>' : ''}
+        <span class="small muted">Aparece no chat, na equipa dos eventos e no menu.</span></div></div></div>
+    <form class="card" id="proff"><h2>Dados</h2>
+      <div class="field"><label>Nome</label><input name="name" value="${esc(u.name || '')}" required></div>
+      <div class="field"><label>Email (é o teu login)</label><input name="email" type="email" value="${esc(u.email)}" required></div>
+      <div class="field"><label>Password atual <span class="muted">(só é precisa para mudar o email)</span></label><input name="current" type="password" autocomplete="current-password"></div>
+      <button class="btn primary">Guardar</button></form>
+    <form class="card" id="pwf"><h2>Password</h2>
+      <div class="field"><label>Password atual</label><input type="password" name="current" required autocomplete="current-password"></div>
+      <div class="field"><label>Nova password</label><input type="password" name="password" required minlength="6" autocomplete="new-password"></div>
+      <button class="btn primary">Mudar password</button></form>
+    <div class="card small muted">Conta: ${ROLES[u.role]}${u.role !== 'superadmin' && u.max_events ? ` · limite de ${u.max_events} eventos` : ''}</div>
+  </div>`);
+  const reloadMe = async () => { const d = await api('GET', '/api/me'); state.me = d.user; renderSetProfile(); };
+  app.onclick = async (e) => {
+    if (e.target.closest('[data-avatar]')) { const data = await pickImage(); if (!data) return; await act(() => api('PUT', '/api/me/avatar', { data }), 'Fotografia atualizada'); return reloadMe(); }
+    if (e.target.closest('[data-avatardel]')) { await act(() => api('DELETE', '/api/me/avatar'), 'Fotografia removida'); return reloadMe(); }
+  };
+  $('#proff').onsubmit = async (e) => { e.preventDefault(); await act(() => api('PUT', '/api/me', formData(e.target)), 'Dados guardados'); reloadMe(); };
+  $('#pwf').onsubmit = async (e) => { e.preventDefault(); await act(() => api('POST', '/api/me/password', formData(e.target)), 'Password alterada'); e.target.reset(); };
+}
+async function renderSetMics() {
+  app.innerHTML = settingsShell('micros', '<div class="empty">A carregar…</div>');
+  const [mine, events] = await Promise.all([api('GET', '/api/mic-lists'), api('GET', '/api/events')]);
+  app.innerHTML = settingsShell('micros', `
+    <p class="muted" style="margin-top:0">Listas de micros prontas a carregar em qualquer evento (Micros → <b>📋 Carregar lista</b>). Carregar uma lista <b>acrescenta</b> micros sem apagar os existentes; nomes repetidos ficam com (1), (2)…</p>
+    <div class="toolbar"><h2 style="margin:0" class="grow">As minhas listas</h2>
+      <button class="btn primary" data-newlist>+ Nova lista</button>
+      ${events.length ? `<select id="fromev" style="width:auto"><option value="">Guardar micros de um evento…</option>${events.map((e) => `<option value="${e.id}">${esc(e.name)} (${e.mic_count})</option>`).join('')}</select>` : ''}</div>
+    ${mine.length ? `<div class="mlgrid">${mine.map((l) => `<div class="mlist"><div class="row" style="justify-content:space-between"><b>${esc(l.name)}</b><span class="small muted">${l.items.length} micros</span></div>
+      <div class="mlchips">${listChips(l.items, 20)}</div>
+      <div class="row" style="gap:6px"><button class="btn sm" data-editlist="${l.id}">Editar</button><button class="btn sm ghost danger" data-dellist="${l.id}">Apagar</button></div></div>`).join('')}</div>`
+    : '<div class="card empty">Ainda não tens listas. Cria uma ou guarda os micros de um evento.</div>'}
+    <h2 style="margin-top:22px">Listas da app</h2>
+    <div class="mlgrid">${MIC_LIST_PRESETS.map((l) => `<div class="mlist"><b>${esc(l.name)}</b><div class="mlchips">${listChips(l.items, 20)}</div>
+      <button class="btn sm" data-copylist="${l.id}">Copiar para as minhas listas</button></div>`).join('')}</div>`);
+  app.onclick = async (e) => {
+    const t = (q) => e.target.closest(q); let el;
+    if (t('[data-newlist]')) return micListEditor(null, renderSetMics);
+    if ((el = t('[data-editlist]'))) return micListEditor(mine.find((x) => x.id === Number(el.dataset.editlist)), renderSetMics);
+    if ((el = t('[data-dellist]'))) { if (await confirmBox('Apagar lista?', 'Os eventos não são afetados.')) { await api('DELETE', `/api/mic-lists/${el.dataset.dellist}`); renderSetMics(); } return; }
+    if ((el = t('[data-copylist]'))) { const l = MIC_LIST_PRESETS.find((x) => x.id === el.dataset.copylist); await act(() => api('POST', '/api/mic-lists', { name: l.name, items: l.items }), 'Copiada — já a podes editar'); return renderSetMics(); }
+  };
+  $('#fromev')?.addEventListener('change', (e) => {
+    const ev = events.find((x) => x.id === Number(e.target.value)); if (!ev) return;
+    modal('Guardar como lista', `<div class="field"><label>Nome da lista</label><input name="lname" value="Micros de ${esc(ev.name)}" required></div>`, {
+      onSubmit: async (d) => { const r = await api('POST', '/api/mic-lists', { name: d.lname, from_event: ev.id }); toast(`Lista guardada com ${r.count} micros`); renderSetMics(); },
+    });
+    e.target.value = '';
+  });
+}
+async function renderSetColors() {
+  if (!state.userThemes) await loadServerTheme();
+  const cur = currentTheme();
+  const same = (a, b) => THEME_VARS.every(([k]) => (a[k] || '').toLowerCase() === (b[k] || '').toLowerCase());
+  const sw = (v) => `<span class="tsw">${['bg', 'panel', 'accent', 'air', 'warn', 'info'].map((k) => `<i style="background:${esc(v[k])}"></i>`).join('')}</span>`;
+  const card = (t, mine) => `<button class="tcard ${same(t.v, cur) ? 'on' : ''}" data-theme="${mine ? 'u' : 'p'}:${esc(t.id)}" style="background:${esc(t.v.panel)};color:${esc(t.v.text)};border-color:${esc(t.v.line)}">
+      ${sw(t.v)}<b>${esc(t.name)}</b>${mine ? `<span class="pdel" data-deltheme="${esc(t.id)}">✕</span>` : ''}</button>`;
+  app.innerHTML = settingsShell('cores', `
+    <p class="muted" style="margin-top:0">Muda as cores do painel inteiro. O esquema fica guardado na tua conta e aplica-se em todos os teus aparelhos.</p>
+    <div class="label-up">Esquemas da app (feitos pelo Claude)</div>
+    <div class="tgrid">${THEME_PRESETS.map((t) => card(t, false)).join('')}<button class="tcard rnd" data-randtheme><span style="font-size:26px">🎲</span><b>Gerar aleatório</b></button></div>
+    <div class="label-up" style="margin-top:16px">Os meus esquemas</div>
+    ${state.userThemes?.length ? `<div class="tgrid">${state.userThemes.map((t) => card(t, true)).join('')}</div>` : '<p class="small muted">Ainda nenhum — ajusta as cores abaixo e guarda.</p>'}
+    <div class="grid2" style="margin-top:16px;align-items:start">
+      <div class="card"><h2>Editar cores</h2>
+        <div class="tvars">${THEME_VARS.map(([k, l]) => `<label class="tvar"><input type="color" data-tvar="${k}" value="${esc(cur[k] || '#000000')}"><span>${esc(l)}</span><code>${esc(cur[k])}</code></label>`).join('')}</div>
+        <div class="row" style="gap:8px;flex-wrap:wrap;margin-top:12px"><button class="btn primary" data-savetheme>💾 Guardar como esquema</button><button class="btn" data-resettheme>Repor original</button></div></div>
+      <div class="card"><h2>Pré-visualização</h2>
+        <div class="tprev"><div class="row" style="gap:8px;flex-wrap:wrap"><button class="btn primary">Botão</button><button class="btn">Normal</button><span class="onair">ON AIR</span><span class="pill warn">recolher de Ana</span><span class="pill info">↺ troca</span><span class="pill danger">avaria</span></div>
+        <div class="msg mine" style="margin-top:12px;max-width:100%"><div class="bubble"><div class="mtext">Troquei as pilhas da lapela 3 🔋</div><div class="mmeta">18:04 <span class="seen">✓✓ Visto por Ana</span></div></div></div>
+        <div class="slot" style="padding:8px 0"><button class="check on">✓</button><div class="name"><b>Ricardo Nogueira</b></div><button class="mik on">${MIK_ICON}<span>Micado</span></button>${batt(2)}<span class="chip" style="background:#8f8a2c">1</span></div></div></div>
+    </div>`);
+  const persist = async (v) => { localStorage.setItem('md_theme', JSON.stringify(v)); await saveThemePrefs({ theme: v }).catch(() => { }); };
+  app.oninput = (e) => { const i = e.target.closest('[data-tvar]'); if (!i) return; document.documentElement.style.setProperty('--' + i.dataset.tvar, i.value); i.nextElementSibling.nextElementSibling.textContent = i.value; };
+  app.onchange = (e) => { if (e.target.closest('[data-tvar]')) persist(currentTheme()); };
+  app.onclick = async (e) => {
+    const del = e.target.closest('[data-deltheme]');
+    if (del) { e.stopPropagation(); state.userThemes = state.userThemes.filter((t) => t.id !== del.dataset.deltheme); await saveThemePrefs({ themes: state.userThemes }); return renderSetColors(); }
+    const tb = e.target.closest('[data-theme]');
+    if (tb) { const [k, id] = tb.dataset.theme.split(':'); const t = (k === 'u' ? state.userThemes : THEME_PRESETS).find((x) => x.id === id); applyTheme(t.v); await persist(t.v); toast(`Esquema "${t.name}" aplicado`); return renderSetColors(); }
+    if (e.target.closest('[data-randtheme]')) { const v = randomTheme(); applyTheme(v); await persist(v); toast('Esquema aleatório aplicado — gostas? Guarda-o abaixo'); return renderSetColors(); }
+    if (e.target.closest('[data-resettheme]')) { applyTheme(null); localStorage.removeItem('md_theme'); await saveThemePrefs({ theme: null }); toast('Cores originais'); return renderSetColors(); }
+    if (e.target.closest('[data-savetheme]')) {
+      modal('Guardar esquema de cores', '<div class="field"><label>Nome</label><input name="tname" required placeholder="Ex: Régie noite"></div>', {
+        onSubmit: async (d) => { state.userThemes = [...(state.userThemes || []), { id: Date.now().toString(36), name: d.tname, v: currentTheme() }]; await saveThemePrefs({ themes: state.userThemes }); toast('Esquema guardado'); renderSetColors(); },
+      });
+    }
+  };
 }
 
 // ---------- cronómetro do bloco ON AIR ----------
@@ -2277,17 +2502,6 @@ async function renderAdmin() {
 function showPassword(email, pw) {
   modal('Credenciais criadas', `<p>Envia estes dados ao teu colega (a password só é mostrada agora):</p>
     <div class="card" style="font-family:ui-monospace,Menlo,monospace;user-select:all">Endereço: ${esc(location.origin)}<br>Email: ${esc(email)}<br>Password: ${esc(pw)}</div>`);
-}
-
-function renderAccount() {
-  app.innerHTML = shell(`<div class="card" style="max-width:460px;margin-top:14px">
-    <h2>A minha conta</h2><p class="muted small">${esc(state.me.email)} · ${ROLES[state.me.role]}</p>
-    <form id="pwf">
-      <div class="field"><label>Password atual</label><input type="password" name="current" required autocomplete="current-password"></div>
-      <div class="field"><label>Nova password</label><input type="password" name="password" required minlength="6" autocomplete="new-password"></div>
-      <button class="btn primary">Mudar password</button>
-    </form></div>`, { crumb: 'Conta' });
-  $('#pwf').onsubmit = async (e) => { e.preventDefault(); await act(() => api('POST', '/api/me/password', formData(e.target)), 'Password alterada'); e.target.reset(); };
 }
 
 boot();
