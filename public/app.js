@@ -180,7 +180,12 @@ async function renderInner() {
   return renderHome();
 }
 
-async function loadEvent() { state.ev = await api('GET', `/api/events/${state.evId}`); }
+async function loadEvent() {
+  const t0 = Date.now();
+  state.ev = await api('GET', `/api/events/${state.evId}`);
+  // relógio do servidor (todos os aparelhos contam o mesmo tempo, mesmo que o relógio de um esteja errado)
+  if (state.ev.server_now) state.timeOffset = state.ev.server_now - Math.round((t0 + Date.now()) / 2);
+}
 
 let reloadT;
 function scheduleReload() {
@@ -479,6 +484,7 @@ function renderEvent(tab) {
       <div style="min-width:0"><h1>${esc(event.name)}</h1><div class="muted small">${esc(fmtDate(event.date))}${event.venue ? ' · ' + esc(event.venue) : ''}${isSuper() && owner ? ' · <span style="color:var(--info)">' + esc(owner.name || owner.email) + '</span>' : ''}</div></div></div>`;
   app.innerHTML = shell(head + content, { crumb, tabs });
   bindEvent(tab);
+  updateTimers();
 }
 
 // ---- alinhamento ----
@@ -534,7 +540,7 @@ function viewRundown() {
     return `<div class="card block ${isCur ? 'current' : ''} ${past ? 'past' : ''}" id="b${b.id}">
       <div class="bh">
         <div class="time">${esc(b.start_time || '--:--')}${b.end_time ? `<small>até ${esc(b.end_time)}</small>` : ''}</div>
-        <div class="title">${isCur ? '<span class="onair">ON AIR</span>' : ''}<b>${esc(b.title || (b.slots.length > 1 ? `Painel · ${b.slots.length} oradores` : 'Orador'))}</b>
+        <div class="title">${isCur ? '<span class="onair">ON AIR</span> <span class="tmini" data-t="mini"></span>' : ''}<b>${esc(b.title || (b.slots.length > 1 ? `Painel · ${b.slots.length} oradores` : 'Orador'))}</b>
           ${b.notes ? `<span class="muted small">${esc(b.notes)}</span>` : ''}</div>
         ${w ? `<button class="btn sm ${isCur ? 'airoff' : 'airsoft'}" data-setcur="${b.id}">${isCur ? 'Tirar do ar' : '● Pôr no ar'}</button>
         <button class="btn sm icon ghost" data-editblock="${b.id}" aria-label="Editar">✎</button>` : ''}
@@ -876,7 +882,7 @@ function micGrid(cols, { airId, editable, live } = {}) {
   };
   const head = `<tr><th class="sticky gcorner">Micro</th>${cols.map((b) => b.kind === 'intervalo'
     ? `<th class="gbreak"><div class="gh"><b class="gtime">${esc(b.start_time || '')}</b><small>☕</small></div></th>`
-    : `<th class="${b.id === airId ? 'gair' : ''}"><button class="gh" ${editable ? `data-editblock="${b.id}"` : ''}>${tag(b)}<b class="gtime">${esc(b.start_time || '--:--')}</b><small>${esc(b.title || (b.slots.length > 1 ? `Painel · ${b.slots.length}` : ''))}</small></button></th>`).join('')}</tr>`;
+    : `<th class="${b.id === airId ? 'gair' : ''}"><button class="gh" ${editable ? `data-editblock="${b.id}"` : ''}>${tag(b)}<b class="gtime">${esc(b.start_time || '--:--')}</b>${b.id === airId ? '<span class="tmini" data-t="mini"></span>' : ''}<small>${esc(b.title || (b.slots.length > 1 ? `Painel · ${b.slots.length}` : ''))}</small></button></th>`).join('')}</tr>`;
   const cell = (b, m) => {
     if (b.kind === 'intervalo') return '<td class="gbreak"></td>';
     const air = b.id === airId ? ' gair' : '';
@@ -933,6 +939,7 @@ function viewLive() {
         ${cur ? '<button class="btn" data-livenav="off" title="Tirar do ar">■</button>' : ''}
       </div>` : ''}
     </div>
+    ${timerPanel()}
     ${blocks.length ? `<div class="card gridwrap live">${micGrid(cols, { airId: a.currentId, live: true })}</div>
     <p class="small muted">Mostra os 2 blocos anteriores, o que está ON AIR e os seguintes. <span class="lg-warn">recolher de</span> = tirar o micro a quem está no ar agora para dar ao próximo. Toca num nome na coluna ON AIR para marcar como ✓ feito.</p>`
     : '<div class="card empty">Sem alinhamento.</div>'}`;
@@ -1096,6 +1103,7 @@ function bindEvent(tab) {
         onSubmit: async (d) => { await api('POST', `/api/blocks/${bid}/slots`, { ...d, mic_id: mid }); scheduleReload(); },
       });
     }
+    if (t('[data-stage]')) return openStage();
     if (t('[data-addch]')) return channelModal({});
     if ((el = t('[data-editch]'))) return channelModal(state.ev.console.channels.find((c) => c.id === Number(el.dataset.editch)));
     if (t('[data-addout]')) return outputModal({});
@@ -1194,7 +1202,101 @@ function bindEvent(tab) {
 // relógio ao vivo
 setInterval(() => {
   const c = $('#clock'); if (c) c.textContent = nowHM();
+  updateTimers();
 }, 1000);
+// ---------- cronómetro do bloco ON AIR ----------
+const srvNow = () => Date.now() + (state.timeOffset || 0);
+function schedAt(hm) {
+  if (!hm) return null;
+  const d = state.ev?.event?.date || todayISO();
+  const t = new Date(`${d}T${hm}:00`).getTime();
+  return isNaN(t) ? null : t;
+}
+function fmtDur(ms, sign = false) {
+  const neg = ms < 0; let t = Math.floor(Math.abs(ms) / 1000);
+  const h = Math.floor(t / 3600), m = Math.floor((t % 3600) / 60), sec = t % 60;
+  const body = h ? `${h}:${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}` : `${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}`;
+  return (sign ? (neg ? '−' : '+') : neg ? '−' : '') + body;
+}
+function timerInfo() {
+  if (!state.ev) return null;
+  const { blocks, event } = state.ev;
+  const i = blocks.findIndex((b) => b.id === event.current_block_id);
+  if (i < 0) return null;
+  const b = blocks[i];
+  const now = srvNow();
+  const schedStart = schedAt(b.start_time);
+  const actualStart = event.on_air_at ? Date.parse(event.on_air_at.replace(' ', 'T') + 'Z') : schedStart;
+  const endHM = b.end_time || blocks.slice(i + 1).find((x) => x.start_time)?.start_time || '';
+  const schedEnd = schedAt(endHM);
+  const planned = schedStart && schedEnd ? schedEnd - schedStart : null;
+  const remain = schedEnd ? schedEnd - now : null;
+  const startDelta = schedStart && actualStart ? actualStart - schedStart : null; // >0 atrasado
+  return { b, now, elapsed: actualStart ? now - actualStart : null, remain, planned, startDelta, schedEnd, endHM };
+}
+function deltaText(ms) {
+  if (ms == null) return '';
+  const min = Math.round(ms / 60000);
+  if (Math.abs(ms) < 60000) return '<span class="tdelta ok">● no horário</span>';
+  return ms > 0 ? `<span class="tdelta late">▲ entrou ${min} min atrasado</span>` : `<span class="tdelta early">▼ entrou ${-min} min adiantado</span>`;
+}
+function timerClass(ti) {
+  if (ti.remain == null) return '';
+  if (ti.remain < 0) return 'over';
+  if (ti.remain < 2 * 60000) return 'soon';
+  return 'ok';
+}
+function timerPanel() {
+  const ti = timerInfo();
+  if (!ti) return '';
+  return `<div class="card timer ${timerClass(ti)}" data-timer>
+    <div class="tcol"><span class="label-up">No ar há</span><b class="tbig" data-t="elapsed">${ti.elapsed != null ? fmtDur(ti.elapsed) : '--:--'}</b></div>
+    <div class="tcol main"><span class="label-up" data-t="rlabel">${ti.remain == null ? 'Sem hora de fim' : ti.remain < 0 ? 'Excedido' : `Faltam (até ${esc(ti.endHM)})`}</span>
+      <b class="tbig huge" data-t="remain">${ti.remain == null ? '—' : ti.remain < 0 ? fmtDur(-ti.remain, true).replace('+', '+') : fmtDur(ti.remain)}</b>
+      ${ti.planned ? `<div class="tbar"><i data-t="bar" style="width:${Math.min(100, Math.max(0, (1 - ti.remain / ti.planned) * 100))}%"></i></div>` : ''}</div>
+    <div class="tcol"><span class="label-up">Horário</span><span data-t="delta">${deltaText(ti.startDelta)}</span>
+      <span class="small" data-t="proj" style="color:#ff8a80;font-weight:600"></span>
+      ${ti.planned ? `<span class="small muted">duração prevista ${fmtDur(ti.planned)}</span>` : ''}
+      <button class="btn sm" data-stage style="margin-top:6px">⛶ Ecrã de palco</button></div>
+  </div>`;
+}
+function updateTimers() {
+  const els = $$('[data-timer], .stage, [data-t="mini"]');
+  if (!els.length) return;
+  const ti = timerInfo();
+  if (!ti) return;
+  const cls = timerClass(ti);
+  $$('[data-timer], .stage').forEach((el) => { el.classList.remove('ok', 'soon', 'over'); if (cls) el.classList.add(cls); });
+  const set = (k, v) => $$(`[data-t="${k}"]`).forEach((e) => { e.textContent = v; });
+  if (ti.elapsed != null) set('elapsed', fmtDur(ti.elapsed));
+  if (ti.remain != null) {
+    set('remain', ti.remain < 0 ? fmtDur(-ti.remain, true) : fmtDur(ti.remain));
+    set('rlabel', ti.remain < 0 ? 'Excedido' : `Faltam (até ${ti.endHM})`);
+    set('slabel', ti.remain < 0 ? 'TEMPO EXCEDIDO' : 'TEMPO RESTANTE');
+    if (ti.planned) $$('[data-t="bar"]').forEach((e) => { e.style.width = Math.min(100, Math.max(0, (1 - ti.remain / ti.planned) * 100)) + '%'; });
+  }
+  set('proj', ti.remain != null && ti.remain < -30000 ? `▲ o próximo bloco já vai ${Math.ceil(-ti.remain / 60000)} min atrasado` : '');
+  set('mini', `${ti.elapsed != null ? fmtDur(ti.elapsed) : ''}${ti.remain != null ? ` · ${ti.remain < 0 ? 'excedido ' + fmtDur(-ti.remain, true) : 'faltam ' + fmtDur(ti.remain)}` : ''}`);
+  $$('[data-t="mini"]').forEach((e) => e.classList.toggle('over', ti.remain != null && ti.remain < 0));
+}
+function openStage() {
+  $('.stage')?.remove();
+  const ti = timerInfo();
+  if (!ti) return toast('Não há nenhum bloco no ar', true);
+  const el = document.createElement('div');
+  el.className = 'stage';
+  el.innerHTML = `<div class="stage-top"><span class="onair lg">ON AIR</span><span class="stage-clock" id="sclock">${nowHM()}</span></div>
+    <div class="stage-label" data-t="slabel">TEMPO RESTANTE</div>
+    <div class="stage-time" data-t="remain">--:--</div>
+    <div class="stage-sub">${esc(ti.b.start_time)}${ti.endHM ? ' – ' + esc(ti.endHM) : ''} · ${esc(ti.b.title || ti.b.slots.map((x) => x.speaker).join(', '))}</div>
+    <div class="stage-hint">toca para fechar</div>`;
+  el.addEventListener('click', () => { el.remove(); if (document.fullscreenElement) document.exitFullscreen().catch(() => { }); });
+  document.body.appendChild(el);
+  try { el.requestFullscreen?.().catch(() => { }); } catch { }
+  updateTimers();
+}
+setInterval(() => { const sc = $('#sclock'); if (sc) sc.textContent = nowHM(); }, 1000);
+
 // ---------- passagem automática / com pergunta para ON AIR ----------
 const airAsked = new Set();
 async function checkAir() {

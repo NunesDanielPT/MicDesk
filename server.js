@@ -298,7 +298,7 @@ function fullEvent(ev) {
     outputs: all('SELECT * FROM console_outputs WHERE event_id = ? ORDER BY sort, id', ev.id),
     routes: all('SELECT r.channel_id, r.output_id FROM console_routes r JOIN console_channels c ON c.id = r.channel_id WHERE c.event_id = ?', ev.id).map((r) => [r.channel_id, r.output_id]),
   };
-  return { event: ev, owner, mics, blocks, console: console_ };
+  return { event: ev, owner, mics, blocks, console: console_, server_now: Date.now() };
 }
 
 const DEFAULT_COLORS = ['#3fa67a', '#5a8a3c', '#8f8a2c', '#a8740a', '#a85a12', '#a04a14', '#9a3518', '#8f1f1f', '#2d6fa8', '#6a4aa8', '#a84a8a', '#4a8a8f'];
