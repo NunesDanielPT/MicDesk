@@ -17,8 +17,10 @@ App web (iPad, telemóvel e PC) para gerir microfones, pilhas e o alinhamento de
   - **Manual**: o bloco só muda quando alguém carrega em **● Pôr no ar**.
   Em qualquer um dos modos podes pôr um bloco no ar ou tirá-lo à mão.
 - **Ao vivo** (para o iPad na régie ou no palco): relógio, quem está em palco, o que vem a seguir e o que é preciso recolher a quem. Os botões Anterior/Próximo funcionam em todos os ecrãs ao mesmo tempo.
-- **Clientes** (multi-empresa): cada cliente tem os seus eventos e utilizadores, que ficam isolados dos outros. Podes suspender um cliente ou pôr-lhe um limite de eventos ativos.
-- **Papéis**: Super admin (tu) · Administrador do cliente · Operador · Só leitura.
+- **Clientes** (multi-empresa): cada cliente tem os seus eventos e utilizadores, que ficam isolados dos outros. Podes suspender um cliente ou mudar-lhe o limite de eventos.
+- **Papéis**: Super admin (tu) · Administrador do cliente · Operador · Só leitura. **Só o super admin cria e gere utilizadores e clientes.**
+- **Limite de eventos**: cada cliente pode ter até **5 eventos** (o super admin pode mudar o limite por cliente; 0 = sem limite). Quando chega ao limite aparece um aviso com a lista dos eventos, os passados em primeiro, para apagar.
+- **Criar evento**: só o nome é obrigatório; data, local, modo ON AIR e micros base estão em *Mais opções*.
 - Duplicar eventos (para reutilizar micros e alinhamento) e arquivar.
 
 ## Instalar no Ubuntu com Portainer
@@ -88,4 +90,5 @@ Abre o endereço no Safari, carrega em **Partilhar → Adicionar ao ecrã princi
 | `ADMIN_PASSWORD` | (aleatória) | Password do super admin no 1º arranque |
 | `COOKIE_SECURE` | false | `true` quando a app estiver atrás de HTTPS |
 | `SESSION_DAYS` | 30 | Dias até a sessão expirar |
+| `DEFAULT_MAX_EVENTS` | 5 | Limite de eventos para novos clientes |
 | `DATA_DIR` | /data | Pasta da base de dados |

@@ -79,7 +79,7 @@ async function api(method, url, body) {
   let data = null;
   try { data = await r.json(); } catch { }
   if (r.status === 401 && url !== '/api/login') { state.me = null; go('#/login'); throw new Error('Sessão expirada'); }
-  if (!r.ok) { const e = new Error(data?.error || 'Erro ' + r.status); throw e; }
+  if (!r.ok) { const e = new Error(data?.error || 'Erro ' + r.status); e.limit = data?.limit; throw e; }
   return data;
 }
 async function act(fn, okMsg) {
@@ -221,7 +221,7 @@ function shell(content, { crumb = '', tabs = '' } = {}) {
           <hr>
           <a href="#/">Eventos</a>
           ${u.role === 'superadmin' ? '<a href="#/admin/orgs">Clientes</a>' : ''}
-          ${isAdmin() ? '<a href="#/admin/users">Utilizadores</a>' : ''}
+          ${u.role === 'superadmin' ? '<a href="#/admin/users">Utilizadores</a>' : ''}
           <a href="#/account">A minha conta</a>
           <hr>
           <button data-logout>Sair</button>
@@ -263,9 +263,10 @@ function renderLogin() {
 // ---------- home (eventos) ----------
 async function renderHome() {
   app.innerHTML = shell('<div class="empty">A carregar…</div>');
-  const [events, orgs] = await Promise.all([
+  const [events, orgs, lim] = await Promise.all([
     api('GET', '/api/events' + (state.showArchived ? '?archived=1' : '')),
     state.me.role === 'superadmin' ? api('GET', '/api/orgs') : Promise.resolve([]),
+    api('GET', '/api/limits'),
   ]);
   const today = todayISO();
   const item = (e) => `<a class="card evcard" href="#/e/${e.id}">
@@ -279,7 +280,8 @@ async function renderHome() {
     </a>`;
   const content = `
     <div class="row" style="justify-content:space-between;flex-wrap:wrap">
-      <div><h1>Eventos</h1><div class="muted small">${state.me.org_name ? esc(state.me.org_name) : 'Todos os clientes'}</div></div>
+      <div><h1>Eventos</h1><div class="muted small">${state.me.org_name ? esc(state.me.org_name) : 'Todos os clientes'}
+        ${lim.max ? ` · <span class="pill ${lim.used >= lim.max ? 'danger' : lim.used >= lim.max - 1 ? 'warn' : ''}">${lim.used} / ${lim.max} eventos</span>` : ''}</div></div>
       <div class="row">
         <div class="seg"><button data-arch="0" class="${!state.showArchived ? 'on' : ''}">Ativos</button><button data-arch="1" class="${state.showArchived ? 'on' : ''}">Arquivo</button></div>
         ${canWrite() ? '<button class="btn primary" id="newev">+ Novo evento</button>' : ''}
@@ -288,7 +290,31 @@ async function renderHome() {
     <div class="list" style="margin-top:16px">${events.length ? events.map(item).join('') : `<div class="card empty">${state.showArchived ? 'Sem eventos arquivados.' : 'Ainda não há eventos. Cria o primeiro.'}</div>`}</div>`;
   app.innerHTML = shell(content);
   $$('[data-arch]').forEach((b) => b.onclick = () => { state.showArchived = b.dataset.arch === '1'; renderHome(); });
-  $('#newev')?.addEventListener('click', () => newEventModal(orgs));
+  $('#newev')?.addEventListener('click', () => (lim.max && lim.used >= lim.max ? limitModal(lim.max) : newEventModal(orgs)));
+}
+
+// limite de eventos atingido: mostra os eventos (passados primeiro) para apagar
+async function limitModal(max) {
+  const evs = [...(await api('GET', '/api/events')), ...(await api('GET', '/api/events?archived=1'))];
+  const today = todayISO();
+  const isPast = (e) => (e.date && e.date < today) || e.archived;
+  evs.sort((a, b) => (isPast(b) - isPast(a)) || String(a.date).localeCompare(String(b.date)));
+  const row = (e) => `<div class="handover" data-row="${e.id}">
+      <div class="grow" style="min-width:0"><b>${esc(e.name)}</b>
+        <div class="small muted">${e.date ? esc(fmtDate(e.date)) : 'sem data'}${isPast(e) ? ' · <span style="color:var(--warn)">passado</span>' : ''}${e.archived ? ' · arquivado' : ''}</div></div>
+      <button type="button" class="btn sm danger" data-delpast="${e.id}">Apagar</button></div>`;
+  const f = modal('Limite de eventos atingido', `
+    <p>Já tens <b>${max} de ${max}</b> eventos. Para criares um novo, apaga eventos passados.</p>
+    <div class="card" style="padding:4px 14px">${evs.map(row).join('')}</div>`);
+  f.addEventListener('click', async (e) => {
+    const b = e.target.closest('[data-delpast]'); if (!b) return;
+    const ev = evs.find((x) => x.id === Number(b.dataset.delpast));
+    if (b.dataset.sure !== '1') { b.dataset.sure = '1'; b.textContent = 'Confirmar?'; b.classList.add('solid'); return; }
+    b.disabled = true;
+    await act(() => api('DELETE', `/api/events/${ev.id}`), `"${ev.name}" apagado`);
+    $(`[data-row="${ev.id}"]`, f)?.remove();
+    closeModal(); renderHome().then(() => $('#newev')?.click());
+  });
 }
 function newEventModal(orgs) {
   const sa = state.me.role === 'superadmin';
@@ -296,14 +322,18 @@ function newEventModal(orgs) {
   modal('Novo evento', `
     ${sa ? `<div class="field"><label>Cliente</label><select name="org_id" required>${orgs.map((o) => `<option value="${o.id}">${esc(o.name)}</option>`).join('')}</select></div>` : ''}
     <div class="field"><label>Nome do evento</label><input name="name" required placeholder="Ex: CCB 13.11.2026"></div>
-    <div class="grid2"><div class="field"><label>Data</label><input name="date" type="date" value="${todayISO()}"></div>
+    <details class="more"><summary>Mais opções (opcional)</summary>
+    <div class="grid2" style="margin-top:12px"><div class="field"><label>Data</label><input name="date" type="date"></div>
     <div class="field"><label>Local / Sala</label><input name="venue" placeholder="Ex: CCB — Sala 2"></div></div>
     <div class="field"><label>Passagem para ON AIR</label><select name="air_mode">${Object.entries(AIR_MODES_LONG).map(([k, v]) => `<option value="${k}">${v}</option>`).join('')}</select></div>
     <div class="field"><label>Começar com</label><select name="template">
       <option value="standard">10 micros base (Head, Púlpito, 1–4 mão, 5–8 lapela)</option>
-      <option value="">Vazio</option></select></div>`, {
+      <option value="">Vazio</option></select></div></details>`, {
     submitLabel: 'Criar',
-    onSubmit: async (d) => { const r = await api('POST', '/api/events', d); go(`#/e/${r.id}/rundown`); },
+    onSubmit: async (d) => {
+      try { const r = await api('POST', '/api/events', d); go(`#/e/${r.id}/rundown`); }
+      catch (e) { if (e.limit) { closeModal(); return limitModal(e.limit); } throw e; }
+    },
   });
 }
 
@@ -690,7 +720,7 @@ function viewSettings() {
           <button class="btn" data-dup>Duplicar evento (reutilizar micros/alinhamento)</button>
           <button class="btn" data-resetdone>Limpar todos os ✓</button>
           <button class="btn" data-archive>${event.archived ? 'Desarquivar' : 'Arquivar'} evento</button>
-          ${isAdmin() ? '<button class="btn danger" data-delev>Apagar evento</button>' : ''}
+          <button class="btn danger" data-delev>Apagar evento</button>
         </div></div>` : ''}
       <div class="card small muted">Partilha este evento com a tua equipa: quem tiver conta no mesmo cliente vê tudo em tempo real — iPad do palco, telemóvel do técnico e PC da régie.
         <div style="margin-top:8px">Última alteração: ${ago(event.updated_at)}</div></div>
@@ -755,7 +785,10 @@ function bindEvent(tab) {
         <label class="row" style="color:var(--text);margin-bottom:8px"><input type="checkbox" name="keep_rundown" checked style="width:auto;min-height:0"> Copiar alinhamento</label>
         <label class="row" style="color:var(--text)"><input type="checkbox" name="keep_people" style="width:auto;min-height:0"> Manter pessoas dedicadas nos micros</label>`, {
         submitLabel: 'Duplicar',
-        onSubmit: async (d) => { const r = await api('POST', `/api/events/${state.evId}/duplicate`, d); toast('Evento duplicado'); state.ev = null; go(`#/e/${r.id}/rundown`); },
+        onSubmit: async (d) => {
+          try { const r = await api('POST', `/api/events/${state.evId}/duplicate`, d); toast('Evento duplicado'); state.ev = null; go(`#/e/${r.id}/rundown`); }
+          catch (e) { if (e.limit) { closeModal(); return limitModal(e.limit); } throw e; }
+        },
       });
     }
     if (t('[data-resetdone]')) {
@@ -837,7 +870,7 @@ setInterval(() => { checkAir().catch(() => { }); }, 10000);
 
 // ---------- admin ----------
 async function renderAdmin(sub) {
-  if (!isAdmin()) return go('#/');
+  if (state.me.role !== 'superadmin') return go('#/');
   if (sub === 'orgs' && state.me.role !== 'superadmin') return go('#/admin/users');
   const tabs = `<nav class="tabs">
     ${state.me.role === 'superadmin' ? `<a class="tab ${sub === 'orgs' ? 'on' : ''}" href="#/admin/orgs">Clientes</a>` : ''}
@@ -871,7 +904,7 @@ async function adminOrgs(tabs) {
   $('#neworg').onclick = () => modal('Novo cliente', `
     <div class="field"><label>Nome do cliente / empresa</label><input name="name" required></div>
     <div class="grid2"><div class="field"><label>Contacto</label><input name="contact" placeholder="Telefone ou email"></div>
-    <div class="field"><label>Limite de eventos ativos (0 = sem limite)</label><input name="max_events" type="number" min="0" value="0"></div></div>
+    <div class="field"><label>Limite de eventos (0 = sem limite)</label><input name="max_events" type="number" min="0" value="5"></div></div>
     <h3 style="margin:8px 0 10px">Administrador do cliente</h3>
     <div class="grid2"><div class="field"><label>Nome</label><input name="admin_name"></div>
     <div class="field"><label>Email</label><input name="admin_email" type="email"></div></div>
@@ -890,7 +923,7 @@ async function adminOrgs(tabs) {
     const f = modal('Editar cliente', `
       <div class="field"><label>Nome</label><input name="name" value="${esc(o.name)}" required></div>
       <div class="grid2"><div class="field"><label>Contacto</label><input name="contact" value="${esc(o.contact)}"></div>
-      <div class="field"><label>Limite de eventos ativos</label><input name="max_events" type="number" min="0" value="${o.max_events}"></div></div>
+      <div class="field"><label>Limite de eventos (0 = sem limite)</label><input name="max_events" type="number" min="0" value="${o.max_events}"></div></div>
       <label class="row" style="color:var(--text)"><input type="checkbox" name="active" ${o.active ? 'checked' : ''} style="width:auto;min-height:0"> Cliente ativo (desativar bloqueia o acesso de todos os utilizadores dele)</label>`, {
       extraFooter: '<button type="button" class="btn danger" id="delorg">Apagar</button>',
       onSubmit: async (d) => { await api('PUT', `/api/orgs/${o.id}`, d); toast('Guardado'); adminOrgs(tabs); },
@@ -915,7 +948,7 @@ async function adminUsers(tabs) {
     <div class="toolbar"><h2 style="margin:0" class="grow">Utilizadores</h2>
       ${sa ? `<select id="orgf" style="width:auto"><option value="">Todos os clientes</option>${orgs.map((o) => `<option value="${o.id}" ${state.userOrgFilter === o.id ? 'selected' : ''}>${esc(o.name)}</option>`).join('')}</select>` : ''}
       <button class="btn primary" id="newuser">+ Utilizador</button></div>
-    <div class="card small muted" style="margin-bottom:12px"><b>Administrador</b>: gere eventos e utilizadores do cliente · <b>Operador</b>: edita micros, pilhas e alinhamento · <b>Só leitura</b>: vê tudo em tempo real (ex: palco, produção).</div>
+    <div class="card small muted" style="margin-bottom:12px">Só tu (super admin) crias utilizadores. <b>Administrador</b> e <b>Operador</b>: criam, editam e apagam eventos, micros, pilhas e alinhamento do seu cliente · <b>Só leitura</b>: vê tudo em tempo real (ex: palco, produção).</div>
     <div class="card tablewrap" style="padding:0"><table class="table">
       <tr><th>Nome</th><th class="hide-sm">Email</th>${sa ? '<th class="hide-sm">Cliente</th>' : ''}<th>Papel</th><th></th></tr>
       ${users.map((u) => `<tr style="${u.active ? '' : 'opacity:.5'}">

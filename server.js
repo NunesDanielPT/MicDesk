@@ -11,6 +11,7 @@ const PORT = parseInt(process.env.PORT || '3000', 10);
 const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, 'data');
 const PUBLIC_DIR = path.join(__dirname, 'public');
 const COOKIE_SECURE = process.env.COOKIE_SECURE === 'true';
+const DEFAULT_MAX_EVENTS = parseInt(process.env.DEFAULT_MAX_EVENTS || '5', 10);
 const SESSION_DAYS = parseInt(process.env.SESSION_DAYS || '30', 10);
 
 fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -106,6 +107,8 @@ CREATE INDEX IF NOT EXISTS ix_slots_block ON slots(block_id);
   const cols = db.prepare("PRAGMA table_info(events)").all().map((c) => c.name);
   if (!cols.includes('air_mode')) db.exec("ALTER TABLE events ADD COLUMN air_mode TEXT NOT NULL DEFAULT 'ask'");
   if (!cols.includes('on_air_at')) db.exec('ALTER TABLE events ADD COLUMN on_air_at TEXT');
+  const ver = db.prepare('PRAGMA user_version').get().user_version;
+  if (ver < 1) { db.exec(`UPDATE orgs SET max_events = ${DEFAULT_MAX_EVENTS} WHERE max_events IS NULL OR max_events = 0; PRAGMA user_version = 1;`); }
 }
 
 // ---------- helpers ----------
@@ -283,7 +286,7 @@ route('GET', '/api/orgs', (req, res, b, p, u) => {
 route('POST', '/api/orgs', (req, res, body, p, u) => {
   if (u.role !== 'superadmin') throw forbid();
   const name = s(body.name, 120); if (!name) throw bad('Nome obrigatório');
-  const r = run('INSERT INTO orgs (name, contact, max_events) VALUES (?, ?, ?)', name, s(body.contact), Number(body.max_events) || 0);
+  const r = run('INSERT INTO orgs (name, contact, max_events) VALUES (?, ?, ?)', name, s(body.contact), body.max_events == null || body.max_events === '' ? DEFAULT_MAX_EVENTS : Math.max(0, Number(body.max_events) || 0));
   const orgId = Number(r.lastInsertRowid);
   if (body.admin_email) {
     const pw = s(body.admin_password) || crypto.randomBytes(6).toString('base64url');
@@ -310,7 +313,7 @@ route('DELETE', '/api/orgs/:id', (req, res, b, p, u) => {
 
 // users
 route('GET', '/api/users', (req, res, b, p, u, query) => {
-  if (!isAdmin(u)) throw forbid();
+  if (u.role !== 'superadmin') throw forbid('Só o super admin gere utilizadores');
   if (u.role === 'superadmin') {
     const org = query.get('org');
     return org ? all('SELECT u.id, u.org_id, u.email, u.name, u.role, u.active, u.created_at, o.name AS org_name FROM users u LEFT JOIN orgs o ON o.id = u.org_id WHERE u.org_id = ? ORDER BY u.name', Number(org))
@@ -319,7 +322,7 @@ route('GET', '/api/users', (req, res, b, p, u, query) => {
   return all('SELECT id, org_id, email, name, role, active, created_at FROM users WHERE org_id = ? ORDER BY name', u.org_id);
 });
 route('POST', '/api/users', (req, res, body, p, u) => {
-  if (!isAdmin(u)) throw forbid();
+  if (u.role !== 'superadmin') throw forbid('Só o super admin gere utilizadores');
   const role = ROLES.includes(body.role) ? body.role : 'operator';
   if (role === 'superadmin' && u.role !== 'superadmin') throw forbid();
   const orgId = u.role === 'superadmin' ? (role === 'superadmin' ? null : Number(body.org_id) || null) : u.org_id;
@@ -332,7 +335,7 @@ route('POST', '/api/users', (req, res, body, p, u) => {
   return { id: Number(r.lastInsertRowid), password: pw };
 });
 route('PUT', '/api/users/:id', (req, res, body, p, u) => {
-  if (!isAdmin(u)) throw forbid();
+  if (u.role !== 'superadmin') throw forbid('Só o super admin gere utilizadores');
   const t = get('SELECT * FROM users WHERE id = ?', p.id); if (!t) throw notFound();
   if (u.role !== 'superadmin' && t.org_id !== u.org_id) throw forbid();
   let role = body.role ?? t.role;
@@ -351,7 +354,7 @@ route('PUT', '/api/users/:id', (req, res, body, p, u) => {
   return { ok: true };
 });
 route('DELETE', '/api/users/:id', (req, res, b, p, u) => {
-  if (!isAdmin(u)) throw forbid();
+  if (u.role !== 'superadmin') throw forbid('Só o super admin gere utilizadores');
   const t = get('SELECT * FROM users WHERE id = ?', p.id); if (!t) throw notFound();
   if (t.id === u.id) throw bad('Não te podes apagar a ti próprio');
   if (u.role !== 'superadmin' && (t.org_id !== u.org_id || t.role === 'superadmin')) throw forbid();
@@ -360,6 +363,17 @@ route('DELETE', '/api/users/:id', (req, res, b, p, u) => {
 });
 
 // events
+class LimitError extends HttpError { constructor(max) { super(409, `Chegaste ao limite de ${max} eventos. Apaga eventos passados para poderes criar um novo.`); this.limit = max; } }
+function checkLimit(org) {
+  if (!(org.max_events > 0)) return;
+  const c = get('SELECT COUNT(*) AS c FROM events WHERE org_id = ?', org.id).c;
+  if (c >= org.max_events) throw new LimitError(org.max_events);
+}
+route('GET', '/api/limits', (req, res, b, p, u) => {
+  if (u.role === 'superadmin') return { max: 0, used: 0 };
+  const org = get('SELECT max_events FROM orgs WHERE id = ?', u.org_id);
+  return { max: org?.max_events || 0, used: get('SELECT COUNT(*) AS c FROM events WHERE org_id = ?', u.org_id).c };
+});
 route('GET', '/api/events', (req, res, b, p, u, query) => {
   const archived = query.get('archived') === '1' ? 1 : 0;
   const base = `SELECT e.*, o.name AS org_name,
@@ -378,10 +392,7 @@ route('POST', '/api/events', (req, res, body, p, u) => {
   const orgId = u.role === 'superadmin' ? Number(body.org_id) : u.org_id;
   const org = get('SELECT * FROM orgs WHERE id = ?', orgId);
   if (!org) throw bad('Escolhe o cliente');
-  if (org.max_events > 0) {
-    const c = get('SELECT COUNT(*) AS c FROM events WHERE org_id = ? AND archived = 0', orgId).c;
-    if (c >= org.max_events) throw bad(`Limite de ${org.max_events} eventos ativos atingido para este cliente`);
-  }
+  checkLimit(org);
   const name = s(body.name, 160); if (!name) throw bad('Nome do evento obrigatório');
   const r = run('INSERT INTO events (org_id, name, date, venue, notes, air_mode) VALUES (?, ?, ?, ?, ?, ?)', orgId, name, s(body.date, 20), s(body.venue, 200), s(body.notes, 4000), ['auto', 'ask', 'manual'].includes(body.air_mode) ? body.air_mode : 'ask');
   const id = Number(r.lastInsertRowid);
@@ -410,7 +421,7 @@ route('PUT', '/api/events/:id', (req, res, body, p, u) => {
   return { ok: true };
 });
 route('DELETE', '/api/events/:id', (req, res, b, p, u) => {
-  if (!isAdmin(u)) throw forbid('Só administradores podem apagar eventos');
+  needWrite(u);
   const ev = eventFor(u, p.id);
   run('DELETE FROM events WHERE id = ?', ev.id);
   broadcast(ev.id, { deleted: true });
@@ -419,6 +430,7 @@ route('DELETE', '/api/events/:id', (req, res, b, p, u) => {
 route('POST', '/api/events/:id/duplicate', (req, res, body, p, u) => {
   needWrite(u);
   const ev = eventFor(u, p.id);
+  checkLimit(get('SELECT * FROM orgs WHERE id = ?', ev.org_id));
   return tx(() => {
     const r = run('INSERT INTO events (org_id, name, date, venue, notes, air_mode) VALUES (?, ?, ?, ?, ?, ?)', ev.org_id, s(body.name, 160) || ev.name + ' (cópia)', s(body.date, 20) || ev.date, ev.venue, ev.notes, ev.air_mode);
     const nid = Number(r.lastInsertRowid);
@@ -700,7 +712,7 @@ const server = http.createServer(async (req, res) => {
     const code = e instanceof HttpError ? e.code : 500;
     if (code === 500) console.error(e);
     if (!res.headersSent) res.writeHead(code, { 'Content-Type': 'application/json; charset=utf-8' });
-    res.end(JSON.stringify({ error: code === 500 ? 'Erro interno' : e.message }));
+    res.end(JSON.stringify({ error: code === 500 ? 'Erro interno' : e.message, ...(e.limit ? { limit: e.limit } : {}) }));
   }
 });
 

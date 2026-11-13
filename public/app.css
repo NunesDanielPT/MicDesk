@@ -236,3 +236,6 @@ h3 { font-size: 16px; margin: 0; }
   .ptable td.m { color: #fff; font-weight: 700; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
   .ptable tr.brk td { background: #eee; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
 }
+
+details.more { border-top: 1px solid var(--line); padding-top: 10px; }
+details.more summary { cursor: pointer; color: var(--muted); font-size: 14px; padding: 6px 0; }
