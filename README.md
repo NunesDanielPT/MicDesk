@@ -41,6 +41,10 @@ App web (iPad, telemóvel e PC) para gerir microfones, pilhas e o alinhamento de
   - Só o dono pode apagar o evento e gerir a equipa.
   - Se o colega ainda não tem conta, fica com um convite pendente. Quando criar conta com esse email, o evento aparece-lhe automaticamente.
   - O botão "Copiar mensagem de convite" prepara o texto para mandar por WhatsApp ou email.
+- **Histórico e notificações**: todas as alterações ficam registadas com o nome de quem as fez, a hora e o que mudou. Por exemplo: *"Ana mudou as pilhas do micro 3: cheia → 1 traço"*, *"Rui pôs ON AIR o bloco 15:55"*, *"Pedro mudou o micro de Ana Branquinho (14:00): Head → 4"*.
+  - O separador **Histórico** de cada evento mostra tudo, agrupado por dia. Dá para filtrar por pessoa e pesquisar.
+  - Quando um colega altera alguma coisa, aparece uma notificação no canto do ecrã.
+  - Com "🔔 Ativar notificações", o aviso chega também quando a app está em segundo plano. No iPhone e no iPad, isto só funciona com a app instalada no ecrã principal.
 - **Privacidade**: cada utilizador vê os seus eventos e os que foram partilhados com ele. O super admin vê todos.
 - **Limite de eventos**: cada utilizador pode ter até **5 eventos** (o super admin muda o limite por utilizador; 0 = sem limite). Ao chegar ao limite aparece um aviso com a lista dos eventos, passados primeiro, para apagar.
 - **Criar evento**: só o nome é obrigatório; data, local, modo ON AIR e micros base estão em *Mais opções*.

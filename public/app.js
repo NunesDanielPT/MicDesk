@@ -205,7 +205,12 @@ function startStream(id) {
   stopStream();
   const es = new EventSource(`/api/events/${id}/stream`);
   es.onmessage = (m) => {
-    try { const d = JSON.parse(m.data); if (d.deleted) { toast('Este evento foi apagado'); go('#/'); return; } } catch { }
+    try {
+      const d = JSON.parse(m.data);
+      if (d.deleted) { toast('Este evento foi apagado'); go('#/'); return; }
+      if (d.msg && d.by_id !== state.me?.id) notifyChange(d.by, d.msg);
+      if (d.msg && location.hash.endsWith('/log')) state.logDirty = true;
+    } catch { }
     scheduleReload();
   };
   es.onopen = () => { state.live = true; $('.livedot')?.classList.add('on'); };
@@ -572,7 +577,7 @@ function micSelect(slot, mics, micById) {
 function renderEvent(tab) {
   const { event, owner } = state.ev;
   const tabs = `<nav class="tabs">
-    ${[['rundown', 'Alinhamento'], ['mics', 'Micros'], ['live', 'Ao vivo'], ['desk', 'Mesa'], ['settings', 'Evento']].map(([k, l]) => `<a class="tab ${tab === k ? 'on' : ''}" href="#/e/${event.id}/${k}">${l}</a>`).join('')}
+    ${[['rundown', 'Alinhamento'], ['mics', 'Micros'], ['live', 'Ao vivo'], ['desk', 'Mesa'], ['log', 'Histórico'], ['settings', 'Evento']].map(([k, l]) => `<a class="tab ${tab === k ? 'on' : ''}" href="#/e/${event.id}/${k}">${l}</a>`).join('')}
   </nav>`;
   const crumb = `<span class="livedot ${state.live ? 'on' : ''}" title="Sincronização em tempo real"></span>${esc(event.name)}`;
   let content = '';
@@ -580,6 +585,7 @@ function renderEvent(tab) {
   else if (tab === 'live') content = viewLive();
   else if (tab === 'settings') content = viewSettings();
   else if (tab === 'desk') content = viewDesk();
+  else if (tab === 'log') content = viewLog();
   else content = viewRundown();
   const head = tab === 'live' ? '' : `<div class="row" style="justify-content:space-between;flex-wrap:wrap;gap:6px">
       <div style="min-width:0"><h1>${esc(event.name)}</h1><div class="muted small">${esc(fmtDate(event.date))}${event.venue ? ' · ' + esc(event.venue) : ''}${isSuper() && owner ? ' · <span style="color:var(--info)">' + esc(owner.name || owner.email) + '</span>' : ''}</div></div></div>`;
@@ -1181,6 +1187,72 @@ function teamCard() {
   </div>`;
 }
 
+// ---- notificações de alterações feitas por outras pessoas ----
+function notifyChange(by, msg) {
+  let box = $('#notifs');
+  if (!box) { box = document.createElement('div'); box.id = 'notifs'; document.body.appendChild(box); }
+  const el = document.createElement('div');
+  el.className = 'notif';
+  el.innerHTML = `<div class="mav">${esc((by || '?').trim()[0] || '?').toUpperCase()}</div><div class="grow"><b>${esc(by)}</b> <span>${esc(msg)}</span><small>${state.ev ? esc(state.ev.event.name) + ' · ' : ''}agora</small></div>`;
+  el.onclick = () => { el.remove(); if (state.evId) go(`#/e/${state.evId}/log`); };
+  box.prepend(el);
+  while (box.children.length > 4) box.lastElementChild.remove();
+  setTimeout(() => { el.classList.add('out'); setTimeout(() => el.remove(), 400); }, 7000);
+  // notificação do sistema quando a app está em segundo plano
+  try {
+    if (document.hidden && 'Notification' in window && Notification.permission === 'granted') {
+      const n = new Notification(`MicDesk · ${by}`, { body: msg, icon: '/icon-192.png', tag: 'md-' + Date.now() });
+      n.onclick = () => { window.focus(); n.close(); };
+    }
+  } catch { }
+}
+
+// ---- histórico do evento ----
+function viewLog() {
+  const canNotify = 'Notification' in window;
+  const perm = canNotify ? Notification.permission : 'unsupported';
+  setTimeout(loadLog, 0);
+  return `<div class="toolbar">
+      <select id="logwho" style="width:auto;min-width:180px"><option value="">Todas as pessoas</option></select>
+      <input id="logq" placeholder="Procurar (ex: micro 3, pilhas, Ana)" class="grow" style="max-width:360px" value="${esc(state.logQ || '')}">
+      <span class="grow"></span>
+      ${perm === 'granted' ? '<span class="pill ok">🔔 Notificações ativas neste aparelho</span>'
+    : perm === 'default' ? '<button class="btn" data-notifperm>🔔 Ativar notificações neste aparelho</button>'
+      : perm === 'denied' ? '<span class="pill warn">🔕 Notificações bloqueadas no browser</span>' : ''}
+    </div>
+    <div class="card" style="padding:0"><div id="loglist"><div class="empty">A carregar…</div></div></div>
+    <p class="small muted">Cada alteração fica registada com o nome de quem a fez, para ninguém ficar com culpas que não são suas. Quando um colega muda alguma coisa, aparece-te uma notificação no canto do ecrã.</p>`;
+}
+async function loadLog() {
+  const box = $('#loglist'); if (!box) return;
+  let rows;
+  try { rows = await api('GET', `/api/events/${state.evId}/log?limit=500`); } catch (e) { box.innerHTML = `<div class="empty">${esc(e.message)}</div>`; return; }
+  state.logRows = rows; state.logDirty = false;
+  const who = $('#logwho');
+  if (who && who.options.length <= 1) {
+    const people = [...new Map(rows.map((r) => [r.user_id, r.user_name])).entries()];
+    who.innerHTML = '<option value="">Todas as pessoas</option>' + people.map(([id, n]) => `<option value="${id}" ${String(state.logWho || '') === String(id) ? 'selected' : ''}>${esc(n)}</option>`).join('');
+  }
+  drawLog();
+}
+function drawLog() {
+  const box = $('#loglist'); if (!box || !state.logRows) return;
+  const q = (state.logQ || '').toLowerCase();
+  const rows = state.logRows.filter((r) => (!state.logWho || String(r.user_id) === String(state.logWho)) && (!q || (r.msg + ' ' + r.user_name).toLowerCase().includes(q)));
+  if (!rows.length) { box.innerHTML = `<div class="empty">${state.logRows.length ? 'Nada encontrado com este filtro.' : 'Ainda não há alterações registadas neste evento.'}</div>`; return; }
+  let lastDay = '';
+  box.innerHTML = rows.map((r) => {
+    const d = new Date(r.at.replace(' ', 'T') + 'Z');
+    const day = d.toLocaleDateString('pt-PT', { weekday: 'long', day: 'numeric', month: 'long' });
+    const head = day !== lastDay ? `<div class="logday">${esc(day)}</div>` : '';
+    lastDay = day;
+    const mine = r.user_id === state.me.id;
+    return `${head}<div class="logrow"><span class="logtime">${d.toLocaleTimeString('pt-PT', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</span>
+      <div class="mav ${mine ? 'own' : ''}">${esc((r.user_name || '?').trim()[0] || '?').toUpperCase()}</div>
+      <div class="grow"><b>${esc(r.user_name)}${mine ? ' <span class="muted small">(tu)</span>' : ''}</b> ${esc(r.msg)}</div></div>`;
+  }).join('');
+}
+
 // ---------- event bindings ----------
 function bindEvent(tab) {
   const root = app;
@@ -1230,6 +1302,7 @@ function bindEvent(tab) {
       });
     }
     if (t('[data-stage]')) return openStage();
+    if (t('[data-notifperm]')) { try { await Notification.requestPermission(); } catch { } return renderEvent('log'); }
     if ((el = t('[data-rmmember]'))) {
       const m = state.ev.members.find((x) => x.id === Number(el.dataset.rmmember));
       const self = m.user_id === state.me.id;
@@ -1302,7 +1375,9 @@ function bindEvent(tab) {
       stopStream(); await act(() => api('DELETE', `/api/events/${state.evId}`), 'Evento apagado'); state.ev = null; state.evId = null; return go('#/');
     }
   };
+  root.oninput = (e) => { if (e.target.id === 'logq') { state.logQ = e.target.value; drawLog(); } };
   root.onchange = async (e) => {
+    if (e.target.id === 'logwho') { state.logWho = e.target.value; drawLog(); return; }
     if (e.target.id === 'cmodel') { await act(() => api('PUT', `/api/events/${state.evId}`, { console_model: e.target.value }), 'Modelo da mesa guardado'); return; }
     const sel = e.target.closest('[data-slotmic]');
     if (sel) {

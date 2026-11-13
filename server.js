@@ -126,6 +126,15 @@ CREATE TABLE IF NOT EXISTS event_members (
 CREATE INDEX IF NOT EXISTS ix_members_user ON event_members(user_id);
 CREATE INDEX IF NOT EXISTS ix_members_email ON event_members(email);
 CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT);
+CREATE TABLE IF NOT EXISTS event_log (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  event_id INTEGER NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+  user_id INTEGER,
+  user_name TEXT NOT NULL DEFAULT '',
+  msg TEXT NOT NULL,
+  at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS ix_log_event ON event_log(event_id, id);
 CREATE INDEX IF NOT EXISTS ix_cch_event ON console_channels(event_id);
 CREATE INDEX IF NOT EXISTS ix_cout_event ON console_outputs(event_id);
 CREATE INDEX IF NOT EXISTS ix_mics_event ON mics(event_id);
@@ -251,6 +260,53 @@ function broadcast(eventId, payload = {}) {
 setInterval(() => {
   for (const set of streams.values()) for (const r of set) { try { r.write(': ping\n\n'); } catch { } }
 }, 25000).unref();
+
+// ---------- histórico de alterações ----------
+const BATT_TXT = ['vazia', '1 traço', '2 traços', 'cheia'];
+const STATUS_TXT = { ok: 'operacional', reserva: 'reserva', avaria: 'avaria', off: 'fora de serviço' };
+const AIR_TXT = { auto: 'automático', ask: 'perguntar', manual: 'manual' };
+function changed(u, evId, msg) {
+  if (msg) {
+    const name = u.name || u.email;
+    run('INSERT INTO event_log (event_id, user_id, user_name, msg) VALUES (?, ?, ?, ?)', evId, u.id, name, String(msg).slice(0, 400));
+    broadcast(evId, { by: name, by_id: u.id, msg });
+  } else broadcast(evId);
+}
+const micLabel = (id) => (id ? get('SELECT label FROM mics WHERE id = ?', id)?.label ?? '?' : 'nenhum');
+const blkTime = (id) => get('SELECT start_time FROM blocks WHERE id = ?', id)?.start_time || '';
+function micDiff(m, f, body) {
+  const out = [];
+  if (body.new_batteries) out.push(`pôs pilhas novas no micro ${m.label}`);
+  else if (f.battery !== m.battery) out.push(`mudou as pilhas do micro ${m.label}: ${BATT_TXT[m.battery]} → ${BATT_TXT[f.battery]}`);
+  if (f.person !== m.person) out.push(f.person ? `atribuiu o micro ${f.label} a ${f.person}` : `tirou a pessoa dedicada do micro ${f.label}`);
+  if (f.status !== m.status) out.push(`marcou o micro ${f.label} como ${STATUS_TXT[f.status]}`);
+  if (f.label !== m.label) out.push(`renomeou o micro ${m.label} → ${f.label}`);
+  if (!out.length && (f.type !== m.type || f.color !== m.color || f.channel !== m.channel || f.frequency !== m.frequency || f.notes !== m.notes)) out.push(`editou o micro ${f.label}`);
+  return out.join(' · ');
+}
+function slotDiff(sl, body, micId, blockId) {
+  const out = [];
+  const name = s(body.speaker ?? sl.speaker, 160);
+  if (body.done != null && (body.done ? 1 : 0) !== sl.done) out.push(`${body.done ? 'marcou ✓' : 'desmarcou'} ${name}`);
+  if (name !== sl.speaker) out.push(`mudou o nome ${sl.speaker} → ${name}`);
+  if (micId !== sl.mic_id) out.push(`mudou o micro de ${name} (${blkTime(blockId)}): ${micLabel(sl.mic_id)} → ${micLabel(micId)}`);
+  if (blockId !== sl.block_id) out.push(`passou ${name} do bloco ${blkTime(sl.block_id)} para ${blkTime(blockId)}`);
+  if (!out.length && body.role !== undefined && s(body.role, 80) !== (sl.role || '')) out.push(`mudou a função de ${name}`);
+  return out.join(' · ');
+}
+function eventDiff(ev, body, curBlock, airMode) {
+  const out = [];
+  if (curBlock !== ev.current_block_id) {
+    const b = curBlock ? get('SELECT start_time, title FROM blocks WHERE id = ?', curBlock) : null;
+    out.push(b ? `pôs ON AIR o bloco ${b.start_time || ''} ${b.title || ''}`.trim() : 'tirou o bloco do ar');
+  }
+  if (airMode !== ev.air_mode) out.push(`mudou o modo ON AIR para ${AIR_TXT[airMode]}`);
+  if (body.console_model !== undefined && s(body.console_model, 120) !== (ev.console_model || '')) out.push(`mudou o modelo da mesa para ${s(body.console_model, 120) || '—'}`);
+  if (body.archived != null && (body.archived ? 1 : 0) !== ev.archived) out.push(body.archived ? 'arquivou o evento' : 'desarquivou o evento');
+  const fields = [['name', 'nome'], ['date', 'data'], ['venue', 'local'], ['notes', 'notas']].filter(([k]) => body[k] !== undefined && s(body[k], 4000) !== (ev[k] || ''));
+  if (fields.length) out.push(`alterou ${fields.map(([, t]) => t).join(', ')} do evento`);
+  return out.join(' · ');
+}
 
 // ---------- auth ----------
 function parseCookies(req) {
@@ -487,7 +543,7 @@ route('POST', '/api/events/:id/members', (req, res, body, p, u) => {
     run('INSERT OR IGNORE INTO event_members (event_id, email, user_id, added_by) VALUES (?, ?, ?, ?)', ev.id, email, usr ? usr.id : null, u.id);
     added.push({ email, has_account: !!usr });
   }
-  broadcast(ev.id);
+  if (added.length) changed(u, ev.id, `adicionou ${added.map((a) => a.email).join(', ')} à equipa`);
   return { added };
 });
 route('DELETE', '/api/events/:id/members/:mid', (req, res, b, p, u) => {
@@ -496,7 +552,7 @@ route('DELETE', '/api/events/:id/members/:mid', (req, res, b, p, u) => {
   const self = m.user_id === u.id || String(m.email).toLowerCase() === String(u.email).toLowerCase();
   if (!canManage(u, ev) && !self) throw forbid();
   run('DELETE FROM event_members WHERE id = ?', m.id);
-  broadcast(ev.id);
+  changed(u, ev.id, self ? 'saiu da equipa do evento' : `removeu ${m.email} da equipa`);
   return { ok: true, left: self };
 });
 route('PUT', '/api/events/:id', (req, res, body, p, u) => {
@@ -514,7 +570,7 @@ route('PUT', '/api/events/:id', (req, res, body, p, u) => {
   run(`UPDATE events SET name = ?, date = ?, venue = ?, notes = ?, current_block_id = ?, archived = ?, air_mode = ?${curBlock !== ev.current_block_id ? ", on_air_at = datetime('now')" : ''} WHERE id = ?`,
     s(body.name ?? ev.name, 160) || ev.name, s(body.date ?? ev.date, 20), s(body.venue ?? ev.venue, 200), s(body.notes ?? ev.notes, 4000),
     curBlock, body.archived == null ? ev.archived : (body.archived ? 1 : 0), airMode, ev.id);
-  broadcast(ev.id);
+  changed(u, ev.id, eventDiff(ev, body, curBlock, airMode));
   return { ok: true };
 });
 route('DELETE', '/api/events/:id', (req, res, b, p, u) => {
@@ -602,7 +658,7 @@ route('POST', '/api/events/:id/import', (req, res, body, p, u) => {
     }
     return { blocks: nBlocks, slots: nSlots, mics: nMics };
   });
-  broadcast(ev.id);
+  changed(u, ev.id, `importou o alinhamento da folha (${res2.blocks} blocos, ${res2.slots} oradores)`);
   return res2;
 });
 
@@ -625,7 +681,7 @@ route('POST', '/api/events/:id/mics', (req, res, body, p, u) => {
   const sort = get('SELECT COALESCE(MAX(sort),0) AS m FROM mics WHERE event_id = ?', ev.id).m + 1;
   const r = run('INSERT INTO mics (event_id, label, type, color, channel, frequency, person, battery, battery_at, status, notes, sort) VALUES (?,?,?,?,?,?,?,?,datetime(\'now\'),?,?,?)',
     ev.id, f.label, f.type, f.color, f.channel, f.frequency, f.person, f.battery, f.status, f.notes, sort);
-  broadcast(ev.id);
+  changed(u, ev.id, `adicionou o micro ${f.label}${f.person ? ' (' + f.person + ')' : ''}`);
   return { id: Number(r.lastInsertRowid) };
 });
 route('PUT', '/api/mics/:id', (req, res, body, p, u) => {
@@ -637,7 +693,7 @@ route('PUT', '/api/mics/:id', (req, res, body, p, u) => {
   run(`UPDATE mics SET label=?, type=?, color=?, channel=?, frequency=?, person=?, battery=?, status=?, notes=?${battChanged ? ", battery_at=datetime('now')" : ''} WHERE id=?`,
     f.label, f.type, f.color, f.channel, f.frequency, f.person, f.battery, f.status, f.notes, m.id);
   if (battChanged) run('INSERT INTO battery_log (mic_id, level, user_name) VALUES (?,?,?)', m.id, f.battery, u.name || u.email);
-  broadcast(m.event_id);
+  changed(u, m.event_id, micDiff(m, f, body));
   return { ok: true };
 });
 route('GET', '/api/mics/:id/log', (req, res, b, p, u) => {
@@ -648,14 +704,14 @@ route('DELETE', '/api/mics/:id', (req, res, b, p, u) => {
   needWrite(u);
   const m = micFor(u, p.id);
   run('DELETE FROM mics WHERE id = ?', m.id);
-  broadcast(m.event_id);
+  changed(u, m.event_id, `apagou o micro ${m.label}`);
   return { ok: true };
 });
 route('POST', '/api/events/:id/mics/order', (req, res, body, p, u) => {
   needWrite(u);
   const ev = eventFor(u, p.id);
   tx(() => (body.ids || []).forEach((id, i) => run('UPDATE mics SET sort = ? WHERE id = ? AND event_id = ?', i, Number(id), ev.id)));
-  broadcast(ev.id);
+  changed(u, ev.id, 'reordenou os micros');
   return { ok: true };
 });
 
@@ -673,7 +729,7 @@ route('POST', '/api/events/:id/blocks', (req, res, body, p, u) => {
     const mic = sl.mic_id ? get('SELECT id FROM mics WHERE id = ? AND event_id = ?', Number(sl.mic_id), ev.id) : null;
     run('INSERT INTO slots (block_id, speaker, role, mic_id, sort) VALUES (?,?,?,?,?)', bid, s(sl.speaker, 160), s(sl.role, 80), mic ? mic.id : null, i + 1);
   });
-  broadcast(ev.id);
+  changed(u, ev.id, `criou o ${kind === 'intervalo' ? 'intervalo' : 'bloco'} ${normTime(body.start_time) || ''} ${s(body.title)}`.replace(/\s+/g, ' ').trim() + ((body.slots || []).filter((x) => s(x.speaker)).length ? ` com ${(body.slots || []).filter((x) => s(x.speaker)).map((x) => s(x.speaker)).join(', ')}` : ''));
   return { id: bid };
 });
 route('PUT', '/api/blocks/:id', (req, res, body, p, u) => {
@@ -682,7 +738,7 @@ route('PUT', '/api/blocks/:id', (req, res, body, p, u) => {
   run('UPDATE blocks SET start_time=?, end_time=?, title=?, kind=?, notes=? WHERE id=?',
     body.start_time === undefined ? b.start_time : normTime(body.start_time), body.end_time === undefined ? b.end_time : normTime(body.end_time),
     s(body.title ?? b.title, 200), body.kind ? (body.kind === 'intervalo' ? 'intervalo' : 'painel') : b.kind, s(body.notes ?? b.notes, 2000), b.id);
-  broadcast(b.event_id);
+  { const nt = body.start_time === undefined ? b.start_time : normTime(body.start_time); changed(u, b.event_id, nt !== b.start_time ? `mudou a hora do bloco ${b.start_time || '--:--'} para ${nt || '--:--'}` : `editou o bloco ${b.start_time || ''} ${s(body.title ?? b.title)}`.trim()); }
   return { ok: true };
 });
 route('DELETE', '/api/blocks/:id', (req, res, b, p, u) => {
@@ -690,7 +746,7 @@ route('DELETE', '/api/blocks/:id', (req, res, b, p, u) => {
   const bl = blockFor(u, p.id);
   run('DELETE FROM blocks WHERE id = ?', bl.id);
   run('UPDATE events SET current_block_id = NULL WHERE id = ? AND current_block_id = ?', bl.event_id, bl.id);
-  broadcast(bl.event_id);
+  changed(u, bl.event_id, `apagou o bloco ${bl.start_time || ''} ${bl.title || ''}`.trim());
   return { ok: true };
 });
 
@@ -701,7 +757,7 @@ route('POST', '/api/blocks/:id/slots', (req, res, body, p, u) => {
   const mic = body.mic_id ? get('SELECT id FROM mics WHERE id = ? AND event_id = ?', Number(body.mic_id), b.event_id) : null;
   const sort = get('SELECT COALESCE(MAX(sort),0) AS m FROM slots WHERE block_id = ?', b.id).m + 1;
   const r = run('INSERT INTO slots (block_id, speaker, role, mic_id, sort) VALUES (?,?,?,?,?)', b.id, s(body.speaker, 160), s(body.role, 80), mic ? mic.id : null, sort);
-  broadcast(b.event_id);
+  changed(u, b.event_id, `adicionou ${s(body.speaker, 160)} ao bloco ${b.start_time || ''}${mic ? ' com o micro ' + micLabel(mic.id) : ''}`);
   return { id: Number(r.lastInsertRowid) };
 });
 route('PUT', '/api/slots/:id', (req, res, body, p, u) => {
@@ -719,21 +775,21 @@ route('PUT', '/api/slots/:id', (req, res, body, p, u) => {
   }
   run('UPDATE slots SET speaker=?, role=?, mic_id=?, done=?, block_id=? WHERE id=?',
     s(body.speaker ?? sl.speaker, 160), s(body.role ?? sl.role, 80), micId, body.done == null ? sl.done : (body.done ? 1 : 0), blockId, sl.id);
-  broadcast(sl.event_id);
+  changed(u, sl.event_id, slotDiff(sl, body, micId, blockId));
   return { ok: true };
 });
 route('DELETE', '/api/slots/:id', (req, res, b, p, u) => {
   needWrite(u);
   const sl = slotFor(u, p.id);
   run('DELETE FROM slots WHERE id = ?', sl.id);
-  broadcast(sl.event_id);
+  changed(u, sl.event_id, `removeu ${sl.speaker} do bloco ${blkTime(sl.block_id)}`);
   return { ok: true };
 });
 route('POST', '/api/blocks/:id/order', (req, res, body, p, u) => {
   needWrite(u);
   const b = blockFor(u, p.id);
   tx(() => (body.ids || []).forEach((id, i) => run('UPDATE slots SET sort = ? WHERE id = ? AND block_id = ?', i + 1, Number(id), b.id)));
-  broadcast(b.event_id);
+  changed(u, b.event_id, `reordenou os oradores do bloco ${b.start_time || ''}`);
   return { ok: true };
 });
 
@@ -749,7 +805,7 @@ route('POST', '/api/events/:id/channels', (req, res, body, p, u) => {
   const r = run('INSERT INTO console_channels (event_id, num, name, mic_id, input, phantom, notes, sort) VALUES (?,?,?,?,?,?,?,?)',
     ev.id, s(body.num, 10), s(body.name, 80), micOf(ev.id, body.mic_id), s(body.input, 40), body.phantom ? 1 : 0, s(body.notes, 300), nextSort('console_channels', ev.id));
   syncMicChannel(Number(r.lastInsertRowid));
-  broadcast(ev.id); return { id: Number(r.lastInsertRowid) };
+  changed(u, ev.id, `criou o canal ${s(body.num)} ${s(body.name)} na mesa`); return { id: Number(r.lastInsertRowid) };
 });
 route('PUT', '/api/channels/:id', (req, res, body, p, u) => {
   const c = chFor(u, p.id);
@@ -757,21 +813,21 @@ route('PUT', '/api/channels/:id', (req, res, body, p, u) => {
     s(body.num ?? c.num, 10), s(body.name ?? c.name, 80), body.mic_id === undefined ? c.mic_id : micOf(c.event_id, body.mic_id),
     s(body.input ?? c.input, 40), body.phantom == null ? c.phantom : (body.phantom ? 1 : 0), s(body.notes ?? c.notes, 300), c.id);
   syncMicChannel(c.id);
-  broadcast(c.event_id); return { ok: true };
+  changed(u, c.event_id, `editou o canal ${s(body.num ?? c.num)} ${s(body.name ?? c.name)} da mesa`); return { ok: true };
 });
-route('DELETE', '/api/channels/:id', (req, res, b, p, u) => { const c = chFor(u, p.id); run('DELETE FROM console_channels WHERE id = ?', c.id); broadcast(c.event_id); return { ok: true }; });
+route('DELETE', '/api/channels/:id', (req, res, b, p, u) => { const c = chFor(u, p.id); run('DELETE FROM console_channels WHERE id = ?', c.id); changed(u, c.event_id, `apagou o canal ${c.num} ${c.name} da mesa`); return { ok: true }; });
 route('POST', '/api/events/:id/outputs', (req, res, body, p, u) => {
   const ev = eventFor(u, p.id);
   const names = Array.isArray(body.names) ? body.names : [body.name];
   tx(() => names.forEach((n) => { if (s(n)) run('INSERT INTO console_outputs (event_id, name, dest, sort) VALUES (?,?,?,?)', ev.id, s(n, 40), s(body.dest, 80), nextSort('console_outputs', ev.id)); }));
-  broadcast(ev.id); return { ok: true };
+  changed(u, ev.id, `criou na mesa a(s) saída(s) ${names.filter((n) => s(n)).join(', ')}`); return { ok: true };
 });
 route('PUT', '/api/outputs/:id', (req, res, body, p, u) => {
   const o = outFor(u, p.id);
   run('UPDATE console_outputs SET name=?, dest=? WHERE id=?', s(body.name ?? o.name, 40), s(body.dest ?? o.dest, 80), o.id);
-  broadcast(o.event_id); return { ok: true };
+  changed(u, o.event_id, `editou a saída da mesa ${o.name}`); return { ok: true };
 });
-route('DELETE', '/api/outputs/:id', (req, res, b, p, u) => { const o = outFor(u, p.id); run('DELETE FROM console_outputs WHERE id = ?', o.id); broadcast(o.event_id); return { ok: true }; });
+route('DELETE', '/api/outputs/:id', (req, res, b, p, u) => { const o = outFor(u, p.id); run('DELETE FROM console_outputs WHERE id = ?', o.id); changed(u, o.event_id, `apagou a saída da mesa ${o.name}`); return { ok: true }; });
 route('POST', '/api/events/:id/routes', (req, res, body, p, u) => {
   const ev = eventFor(u, p.id);
   const c = get('SELECT id FROM console_channels WHERE id = ? AND event_id = ?', Number(body.channel_id), ev.id);
@@ -779,7 +835,7 @@ route('POST', '/api/events/:id/routes', (req, res, body, p, u) => {
   if (!c || !o) throw bad('Canal ou saída inválidos');
   if (body.on) run('INSERT OR IGNORE INTO console_routes (channel_id, output_id) VALUES (?,?)', c.id, o.id);
   else run('DELETE FROM console_routes WHERE channel_id = ? AND output_id = ?', c.id, o.id);
-  broadcast(ev.id); return { ok: true };
+  { const cc = get('SELECT num, name FROM console_channels WHERE id = ?', c.id), oo = get('SELECT name FROM console_outputs WHERE id = ?', o.id); changed(u, ev.id, `${body.on ? 'ligou' : 'desligou'} na mesa o canal ${cc.num} ${cc.name} → ${oo.name}`); } return { ok: true };
 });
 // criar um canal por cada micro que ainda não tenha canal
 route('POST', '/api/events/:id/channels/from-mics', (req, res, body, p, u) => {
@@ -805,7 +861,16 @@ route('POST', '/api/events/:id/channels/from-mics', (req, res, body, p, u) => {
     }
     return count;
   });
-  broadcast(ev.id); return { created: n };
+  changed(u, ev.id, `criou ${n} canais na mesa a partir dos micros`); return { created: n };
+});
+
+// histórico do evento
+route('GET', '/api/events/:id/log', (req, res, b, p, u, query) => {
+  const ev = eventFor(u, p.id);
+  const lim = Math.min(1000, Math.max(1, Number(query.get('limit')) || 300));
+  const who = Number(query.get('user')) || 0;
+  return who ? all('SELECT id, user_id, user_name, msg, at FROM event_log WHERE event_id = ? AND user_id = ? ORDER BY id DESC LIMIT ?', ev.id, who, lim)
+    : all('SELECT id, user_id, user_name, msg, at FROM event_log WHERE event_id = ? ORDER BY id DESC LIMIT ?', ev.id, lim);
 });
 
 // live stream

@@ -474,3 +474,16 @@ td.gair.gfree { background: #1a1213; }
 .switch input:checked + span { background: var(--accent); border-color: var(--accent); }
 .switch input:checked + span::after { transform: translateX(22px); background: #fff; }
 @media (max-width: 520px) { .hero-stats { gap: 18px; flex-wrap: nowrap; } .hero-stats b { font-size: 26px; } .hero-stats span { font-size: 10.5px; letter-spacing: .8px; } }
+
+/* notificações de alterações */
+#notifs { position: fixed; top: calc(70px + env(safe-area-inset-top)); right: 16px; z-index: 70; display: flex; flex-direction: column; gap: 8px; width: min(380px, calc(100vw - 32px)); pointer-events: none; }
+.notif { pointer-events: auto; cursor: pointer; display: flex; gap: 12px; align-items: flex-start; background: #1d2126; border: 1px solid #2f5a48; border-left: 4px solid var(--accent); border-radius: 12px; padding: 12px 14px; box-shadow: 0 12px 30px rgba(0,0,0,.45); animation: nin .25s ease-out; font-size: 14.5px; line-height: 1.35; transition: opacity .4s, transform .4s; }
+.notif small { display: block; color: var(--muted); font-size: 12px; margin-top: 3px; }
+.notif.out { opacity: 0; transform: translateX(30px); }
+@keyframes nin { from { opacity: 0; transform: translateY(-10px); } }
+/* histórico */
+.logday { padding: 10px 16px; background: var(--panel2); color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: 1px; font-weight: 700; position: sticky; top: 0; }
+.logrow { display: flex; align-items: center; gap: 12px; padding: 10px 16px; border-top: 1px solid var(--line); font-size: 15px; }
+.logrow .mav { width: 30px; height: 30px; font-size: 13px; }
+.logtime { font-variant-numeric: tabular-nums; color: var(--muted); font-size: 13px; min-width: 64px; }
+@media (max-width: 560px) { .logrow { align-items: flex-start; flex-wrap: wrap; gap: 8px; } .logtime { min-width: 0; } }
