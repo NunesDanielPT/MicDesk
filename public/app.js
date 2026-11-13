@@ -224,7 +224,7 @@ function shell(content, { crumb = '', tabs = '' } = {}) {
   return `<header class="topbar">
     <div class="row">
       <div class="row" style="min-width:0;gap:12px">
-        <a class="brand" href="#/"><span class="dot"></span>MicDesk</a>
+        <a class="brand" href="#/">${LOGO(28)}<span class="wm sm"><b>MIC</b><i>DESK</i></span></a>
         ${crumb ? `<span class="crumb">${crumb}</span>` : ''}
       </div>
       <div class="menu">
@@ -322,23 +322,124 @@ function installModal() {
 }
 
 // ---------- login ----------
-function renderLogin() {
-  app.innerHTML = `<div class="login"><form class="card" id="lf">
-    <div class="brand" style="font-size:22px;margin-bottom:6px"><span class="dot"></span>MicDesk</div>
-    <p class="muted" style="margin-top:0">Gestão de microfones e alinhamento de eventos</p>
-    <div class="field"><label>Email</label><input name="email" type="email" autocomplete="username" required></div>
-    <div class="field"><label>Password</label><input name="password" type="password" autocomplete="current-password" required></div>
-    <button class="btn primary" style="width:100%">Entrar</button>
-    ${isStandalone() ? '' : '<button type="button" class="btn ghost" style="width:100%;margin-top:8px" data-install>📲 Instalar a app neste aparelho</button>'}
-  </form></div>`;
-  $('#lf').addEventListener('submit', async (e) => {
+// ---------- logótipo ----------
+const LOGO = (size = 40) => `<svg class="logo" width="${size}" height="${size}" viewBox="0 0 64 64" aria-hidden="true">
+  <defs><linearGradient id="lg-cap" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#5ff0b8"/><stop offset="1" stop-color="#1f9e70"/></linearGradient></defs>
+  <path class="lw lw1" d="M14 22a20 20 0 0 0 0 20M50 22a20 20 0 0 1 0 20" fill="none" stroke="#34c38f" stroke-width="3" stroke-linecap="round" opacity=".55"/>
+  <path class="lw lw2" d="M7 16a29 29 0 0 0 0 32M57 16a29 29 0 0 1 0 32" fill="none" stroke="#34c38f" stroke-width="3" stroke-linecap="round" opacity=".28"/>
+  <rect x="23" y="6" width="18" height="30" rx="9" fill="url(#lg-cap)"/>
+  <path d="M23 15h18M23 21h18M23 27h18" stroke="#0e3d2c" stroke-width="2" opacity=".55"/>
+  <path d="M18 30a14 14 0 0 0 28 0" fill="none" stroke="#e9eaec" stroke-width="3.2" stroke-linecap="round"/>
+  <path d="M32 44v9M24 56h16" stroke="#e9eaec" stroke-width="3.2" stroke-linecap="round"/>
+  <circle cx="50" cy="10" r="4" fill="#e53935"/>
+</svg>`;
+const WORDMARK = '<span class="wm"><b>MIC</b><i>DESK</i></span>';
+
+const FEATURES = [
+  ['mic', 'Micros com identidade', 'Mão, lapela, headset, púlpito, instrumento… cada um com cor, número, canal, frequência e pessoa dedicada.'],
+  ['batt', 'Pilhas sob controlo', 'Cheia, 2 traços, 1 traço, vazia — com um toque. Botão "pilhas novas" e histórico de quem mudou e quando.'],
+  ['list', 'Alinhamento por blocos', 'Painéis com vários oradores à mesma hora, intervalos, notas. Importa direto do Excel ou Google Sheets.'],
+  ['grid', 'Grelha de micros', 'Vê de uma vez quem tem cada micro em cada bloco, onde há trocas e o que fica livre.'],
+  ['eye', 'Previsão ao criar blocos', 'Ao escolher o micro de um orador vês logo se está livre ou a quem tens de o recolher.'],
+  ['air', 'ON AIR', 'Bloco no ar destacado a vermelho. Passa sozinho à hora, pergunta antes, ou só manualmente — tu escolhes.'],
+  ['timer', 'Cronómetro e ecrã de palco', 'Tempo no ar, countdown até ao fim, atraso ou adiantamento — e um ecrã gigante para o orador.'],
+  ['swap', 'Ao vivo: quem vem a seguir', 'Grelha com os blocos anteriores, o que está no ar e os seguintes, com "recolher de…" em destaque.'],
+  ['desk', 'Matriz da mesa de som', 'Canais, saídas, stagebox, 48V e routing num toque. Gera canais a partir dos micros.'],
+  ['team', 'Equipa no mesmo evento', 'Convida colegas por email. Todos veem as mudanças em tempo real, em qualquer aparelho.'],
+  ['dev', 'App em todos os aparelhos', 'Instala no iPhone, iPad, Android, Windows e Mac — ecrã inteiro, ícone próprio.'],
+  ['print', 'Imprimir e reutilizar', 'Alinhamento e matriz em papel, duplicar eventos e arquivar os que já passaram.'],
+];
+const FICONS = {
+  mic: '<rect x="9" y="3" width="6" height="11" rx="3"/><path d="M6 11a6 6 0 0 0 12 0M12 17v4M9 21h6"/>',
+  batt: '<rect x="3" y="7" width="16" height="10" rx="2"/><path d="M21 10v4M6 10v4M9.5 10v4M13 10v4"/>',
+  list: '<path d="M8 6h12M8 12h12M8 18h12M4 6h.01M4 12h.01M4 18h.01"/>',
+  grid: '<rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M3 15h18M9 3v18M15 3v18"/>',
+  eye: '<path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>',
+  air: '<circle cx="12" cy="12" r="3"/><path d="M7.8 7.8a6 6 0 0 0 0 8.4M16.2 7.8a6 6 0 0 1 0 8.4M4.9 4.9a10 10 0 0 0 0 14.2M19.1 4.9a10 10 0 0 1 0 14.2"/>',
+  timer: '<circle cx="12" cy="13" r="8"/><path d="M12 9v4l2.5 2.5M9 2h6"/>',
+  swap: '<path d="M7 7h11l-3-3M17 17H6l3 3"/>',
+  desk: '<path d="M4 21V9M4 5V3M12 21v-6M12 11V3M20 21v-9M20 8V3M2 9h4M10 11h4M18 8h4"/>',
+  team: '<circle cx="9" cy="8" r="3.5"/><path d="M2.5 20a6.5 6.5 0 0 1 13 0"/><circle cx="17" cy="9" r="2.5"/><path d="M16 14.5a5 5 0 0 1 6 4.5"/>',
+  dev: '<rect x="2" y="5" width="13" height="10" rx="1.5"/><path d="M6 19h5"/><rect x="17" y="8" width="5" height="11" rx="1.2"/>',
+  print: '<path d="M6 9V3h12v6M6 17H4a2 2 0 0 1-2-2v-4a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v4a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="7"/>',
+};
+const ficon = (k) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${FICONS[k]}</svg>`;
+
+// ---------- página principal (entrar / criar conta) ----------
+async function renderLogin() {
+  let cfg = { signup: true };
+  try { cfg = await (await fetch('/api/public/config')).json(); } catch { }
+  const mode = state.authMode === 'signup' && cfg.signup ? 'signup' : 'login';
+  const bars = Array.from({ length: 48 }, (_, i) => `<i style="--d:${((i * 37) % 23) / 10}s;--h:${30 + ((i * 53) % 70)}%"></i>`).join('');
+  app.innerHTML = `<div class="landing">
+    <header class="lnav">
+      <div class="lbrand">${LOGO(34)}${WORDMARK}</div>
+      <div class="row">
+        ${isStandalone() ? '' : '<button class="btn sm ghost" data-install>📲 Instalar app</button>'}
+        <button class="btn sm" data-goauth="login">Entrar</button>
+      </div>
+    </header>
+    <section class="hero">
+      <div class="vu" aria-hidden="true">${bars}</div>
+      <div class="hero-in">
+        <div class="hero-text">
+          <div class="hero-logo">${LOGO(120)}</div>
+          <h1 class="hero-title">MIC<span>DESK</span></h1>
+          <p class="hero-sub">A régie dos teus microfones.<br>Micros, pilhas, oradores, ON AIR e mesa de som — sincronizado em tempo real entre todos os aparelhos da equipa.</p>
+          <div class="hero-stats">
+            <div><b>${FEATURES.length}</b><span>ferramentas</span></div>
+            <div><b>5</b><span>plataformas</span></div>
+            <div><b>∞</b><span>aparelhos ao vivo</span></div>
+          </div>
+        </div>
+        <form class="card authcard" id="authf" autocomplete="on">
+          <div class="authtabs">
+            <button type="button" data-goauth="login" class="${mode === 'login' ? 'on' : ''}">Entrar</button>
+            ${cfg.signup ? `<button type="button" data-goauth="signup" class="${mode === 'signup' ? 'on' : ''}">Criar conta</button>` : ''}
+          </div>
+          ${mode === 'signup' ? `
+            <div class="field"><label>Nome</label><input name="name" autocomplete="name" required placeholder="O teu nome"></div>
+            <div class="field"><label>Email</label><input name="email" type="email" autocomplete="email" required placeholder="nome@exemplo.pt"></div>
+            <div class="field"><label>Password</label><input name="password" type="password" autocomplete="new-password" minlength="6" required placeholder="mínimo 6 caracteres"></div>
+            <button class="btn primary big" style="width:100%">Criar conta grátis</button>
+            <p class="small muted" style="margin:10px 0 0">Se um colega já te convidou para um evento, usa o mesmo email — o evento aparece-te logo.</p>`
+    : `
+            <div class="field"><label>Email</label><input name="email" type="email" autocomplete="username" required placeholder="nome@exemplo.pt"></div>
+            <div class="field"><label>Password</label><input name="password" type="password" autocomplete="current-password" required></div>
+            <button class="btn primary big" style="width:100%">Entrar</button>
+            ${cfg.signup ? '<p class="small muted" style="margin:10px 0 0;text-align:center">Ainda não tens conta? <a href="#" data-goauth="signup">Criar conta</a></p>' : ''}`}
+        </form>
+      </div>
+    </section>
+    <section class="features">
+      <h2 class="sec-title">Tudo o que precisas para o som de um evento</h2>
+      <p class="sec-sub">Do armazém ao ON AIR — feito por técnicos de som, para técnicos de som.</p>
+      <div class="fgrid">${FEATURES.map(([ic, t, d]) => `<div class="fcard"><div class="fic">${ficon(ic)}</div><h3>${t}</h3><p>${d}</p></div>`).join('')}</div>
+    </section>
+    <section class="steps">
+      <div class="step"><b>1</b><h3>Cria o evento</h3><p>Só precisas do nome. Micros base já vêm prontos.</p></div>
+      <div class="step"><b>2</b><h3>Monta o alinhamento</h3><p>Blocos, oradores e micros — ou cola da tua folha Excel.</p></div>
+      <div class="step"><b>3</b><h3>Convida a equipa</h3><p>Palco, régie e produção a ver o mesmo, ao segundo.</p></div>
+      <div class="step"><b><span class="onair">ON AIR</span></b><h3>Vai para o ar</h3><p>Cronómetro, trocas de micro e pilhas sempre à vista.</p></div>
+    </section>
+    <footer class="lfoot">${LOGO(22)} MICDESK · gestão de microfonia para eventos</footer>
+  </div>`;
+  app.onclick = (e) => {
+    const g = e.target.closest('[data-goauth]');
+    if (g) { e.preventDefault(); state.authMode = g.dataset.goauth; renderLogin().then(() => { $('.authcard').scrollIntoView({ behavior: 'smooth', block: 'center' }); $('.authcard input')?.focus(); }); }
+  };
+  $('#authf').addEventListener('submit', async (e) => {
     e.preventDefault();
+    const btn = $('button.big', e.target); btn.disabled = true;
     try {
-      await api('POST', '/api/login', formData(e.target));
+      let shared = 0;
+      if (mode === 'signup') shared = (await api('POST', '/api/register', formData(e.target))).shared;
+      else await api('POST', '/api/login', formData(e.target));
       const d = await api('GET', '/api/me');
-      state.me = d.user; state.types = d.types; state.colors = d.colors;
+      state.me = d.user; state.types = d.types; state.colors = d.colors; state.authMode = 'login';
+      if (mode === 'signup') toast(shared ? `Bem-vindo! Já tens ${shared} evento(s) partilhado(s) contigo.` : 'Conta criada. Bem-vindo à MicDesk!');
       go(location.hash.startsWith('#/e/') ? location.hash : '#/');
-    } catch (err) { toast(err.message, true); }
+    } catch (err) { toast(err.message, true); btn.disabled = false; }
   });
 }
 
@@ -359,9 +460,9 @@ async function renderHome() {
       <div class="row" style="justify-content:space-between;align-items:flex-start">
         <div style="min-width:0"><h3>${esc(e.name)}</h3>
           <div class="muted small">${[e.date && esc(fmtDate(e.date)), e.venue && esc(e.venue), sa && '<span style="color:var(--info)">' + esc(e.owner_name || e.owner_email) + '</span>'].filter(Boolean).join(' · ')}</div></div>
-        ${e.date === today ? '<span class="pill ok">Hoje</span>' : ''}
+        <div class="row" style="gap:6px">${!sa && !e.is_owner ? `<span class="pill info">👥 de ${esc(e.owner_name || e.owner_email)}</span>` : ''}${e.date === today ? '<span class="pill ok">Hoje</span>' : ''}</div>
       </div>
-      <div class="pills"><span class="pill">${e.mic_count} micros</span><span class="pill">${e.block_count} blocos</span>
+      <div class="pills"><span class="pill">${e.mic_count} micros</span>${e.member_count ? `<span class="pill">👥 ${e.member_count + 1} na equipa</span>` : ''}<span class="pill">${e.block_count} blocos</span>
         ${e.low_batt ? `<span class="pill warn">${e.low_batt} pilhas baixas</span>` : ''}</div>
     </a>`;
   const content = `
@@ -384,7 +485,7 @@ async function renderHome() {
 
 // limite de eventos atingido: mostra os eventos (passados primeiro) para apagar
 async function limitModal(max) {
-  const evs = await api('GET', '/api/events?all=1');
+  const evs = (await api('GET', '/api/events?all=1')).filter((e) => e.is_owner);
   const today = todayISO();
   const isPast = (e) => (e.date && e.date < today) || e.archived;
   evs.sort((a, b) => (isPast(b) - isPast(a)) || String(a.date).localeCompare(String(b.date)));
@@ -1047,11 +1148,36 @@ function viewSettings() {
           <button class="btn" data-dup>Duplicar evento (reutilizar micros/alinhamento)</button>
           <button class="btn" data-resetdone>Limpar todos os ✓</button>
           <button class="btn" data-archive>${event.archived ? 'Desarquivar' : 'Arquivar'} evento</button>
-          <button class="btn danger" data-delev>Apagar evento</button>
+          ${state.ev.access?.manage ? '<button class="btn danger" data-delev>Apagar evento</button>' : ''}
         </div></div>` : ''}
-      <div class="card small muted">Abre este evento com a tua conta em vários aparelhos ao mesmo tempo (iPad do palco, telemóvel, PC da régie) — tudo sincroniza em tempo real.
+      ${teamCard()}
+      <div class="card small muted">Abre este evento em vários aparelhos ao mesmo tempo (iPad do palco, telemóvel, PC da régie) — tudo sincroniza em tempo real.
         <div style="margin-top:8px">Última alteração: ${ago(event.updated_at)}</div></div>
     </div>
+  </div>`;
+}
+
+// ---- equipa do evento ----
+function teamCard() {
+  const { members = [], owner, access = {} } = state.ev;
+  const me = state.me;
+  const row = (m) => `<div class="mrow">
+      <div class="mav">${esc((m.name || m.email).trim()[0] || '?').toUpperCase()}</div>
+      <div class="grow" style="min-width:0"><b>${esc(m.name || m.email)}</b><div class="small muted">${esc(m.email)}${m.pending ? ' · <span style="color:var(--warn)">convite pendente — ainda sem conta</span>' : ''}</div></div>
+      ${access.manage || m.user_id === me.id || String(m.email).toLowerCase() === String(me.email).toLowerCase()
+    ? `<button class="btn sm ghost" data-rmmember="${m.id}">${m.user_id === me.id ? 'Sair' : 'Remover'}</button>` : ''}
+    </div>`;
+  return `<div class="card team">
+    <h2>👥 Equipa do evento</h2>
+    <div class="mrow"><div class="mav own">${esc(((owner?.name || owner?.email || '?').trim()[0] || '?').toUpperCase())}</div>
+      <div class="grow"><b>${esc(owner?.name || owner?.email || '')}</b><div class="small muted">${esc(owner?.email || '')} · dono do evento</div></div></div>
+    ${members.map(row).join('')}
+    ${access.manage ? `<form id="addmember" class="row" style="margin-top:12px">
+        <input name="email" type="text" inputmode="email" placeholder="email do colega (vários: separa por vírgulas)" required class="grow">
+        <button class="btn primary">Adicionar</button></form>
+      <p class="small muted" style="margin:8px 0 0">Os colegas veem e editam este evento em tempo real (micros, pilhas, alinhamento, ON AIR, mesa). Só tu o podes apagar ou gerir a equipa. Se ainda não têm conta, ficam convidados: basta criarem conta com este email.</p>
+      ${members.some((m) => m.pending) ? '<button type="button" class="btn sm" data-copyinvite style="margin-top:10px">📋 Copiar mensagem de convite</button>' : ''}`
+    : '<p class="small muted" style="margin:8px 0 0">Foste adicionado a este evento por quem o criou.</p>'}
   </div>`;
 }
 
@@ -1104,6 +1230,19 @@ function bindEvent(tab) {
       });
     }
     if (t('[data-stage]')) return openStage();
+    if ((el = t('[data-rmmember]'))) {
+      const m = state.ev.members.find((x) => x.id === Number(el.dataset.rmmember));
+      const self = m.user_id === state.me.id;
+      if (!(await confirmBox(self ? 'Sair deste evento?' : `Remover ${m.name || m.email}?`, self ? 'Deixas de ver este evento.' : 'Esta pessoa deixa de ter acesso ao evento.', self ? 'Sair' : 'Remover'))) return;
+      const r = await act(() => api('DELETE', `/api/events/${state.evId}/members/${m.id}`));
+      if (r.left) { stopStream(); state.ev = null; state.evId = null; return go('#/'); }
+      return scheduleReload();
+    }
+    if (t('[data-copyinvite]')) {
+      const msg = `Olá! Adicionei-te ao evento "${state.ev.event.name}" na MicDesk.\nCria a tua conta com este email em ${location.origin} e o evento aparece-te automaticamente.`;
+      try { await navigator.clipboard.writeText(msg); toast('Mensagem copiada — cola no WhatsApp ou email'); } catch { modal('Mensagem de convite', `<textarea style="font-family:inherit" rows="5">${esc(msg)}</textarea>`); }
+      return;
+    }
     if (t('[data-addch]')) return channelModal({});
     if ((el = t('[data-editch]'))) return channelModal(state.ev.console.channels.find((c) => c.id === Number(el.dataset.editch)));
     if (t('[data-addout]')) return outputModal({});
@@ -1183,6 +1322,13 @@ function bindEvent(tab) {
       f.reset(); $('input', f).focus();
       state.focusAdd = f.dataset.addslot;
       return scheduleReload();
+    }
+    if (f.id === 'addmember') {
+      e.preventDefault();
+      const r = await act(() => api('POST', `/api/events/${state.evId}/members`, formData(f)));
+      const pend = r.added.filter((x) => !x.has_account).length;
+      toast(r.added.length ? `${r.added.length} colega(s) adicionado(s)${pend ? ` · ${pend} convite(s) pendente(s)` : ''}` : 'Já estava na equipa');
+      f.reset(); return scheduleReload();
     }
     if (f.id === 'evform') {
       e.preventDefault();
@@ -1334,7 +1480,7 @@ setInterval(() => { checkAir().catch(() => { }); }, 10000);
 async function renderAdmin() {
   if (!isSuper()) return go('#/');
   app.innerHTML = shell('<div class="empty">A carregar…</div>', { crumb: 'Utilizadores' });
-  const [users, stats] = await Promise.all([api('GET', '/api/users'), api('GET', '/api/admin/stats')]);
+  const [users, stats, cfgS] = await Promise.all([api('GET', '/api/users'), api('GET', '/api/admin/stats'), api('GET', '/api/admin/settings')]);
   const roleOpts = (sel) => Object.entries(ROLES).map(([k, v]) => `<option value="${k}" ${k === sel ? 'selected' : ''}>${v}</option>`).join('');
   app.innerHTML = shell(`
     <div class="stats" style="margin-top:14px">
@@ -1343,6 +1489,8 @@ async function renderAdmin() {
       <div class="card stat"><b>${stats.mics}</b><span>micros</span></div>
       <div class="card stat"><b style="color:var(--accent)">${stats.live_connections}</b><span>ecrãs ligados agora</span></div>
     </div>
+    <div class="card row" style="margin-bottom:12px;flex-wrap:wrap"><div class="grow"><b>Registo de novas contas</b><div class="small muted">Permite que qualquer pessoa crie conta na página principal (cada conta tem limite de 5 eventos).</div></div>
+      <label class="switch"><input type="checkbox" id="signupt" ${cfgS.allow_signup ? 'checked' : ''}><span></span></label></div>
     <div class="toolbar"><h2 style="margin:0" class="grow">Utilizadores</h2><button class="btn primary" id="newuser">+ Utilizador</button></div>
     <div class="card small muted" style="margin-bottom:12px">Cada utilizador só vê e gere os seus próprios eventos. Tu, como super admin, vês os eventos de todos.</div>
     <div class="card tablewrap" style="padding:0"><table class="table">
@@ -1354,6 +1502,7 @@ async function renderAdmin() {
         <td style="text-align:right"><button class="btn sm" data-edituser="${u.id}">Editar</button></td></tr>`).join('')}
     </table></div>`, { crumb: 'Utilizadores' });
 
+  $('#signupt').onchange = (e) => act(() => api('PUT', '/api/admin/settings', { allow_signup: e.target.checked }), e.target.checked ? 'Registo aberto' : 'Registo fechado');
   $('#newuser').onclick = () => modal('Novo utilizador', `
     <div class="grid2"><div class="field"><label>Nome</label><input name="name" required></div>
     <div class="field"><label>Email (é o login)</label><input name="email" type="email" required></div></div>

@@ -114,6 +114,18 @@ CREATE TABLE IF NOT EXISTS console_routes (
   output_id INTEGER NOT NULL REFERENCES console_outputs(id) ON DELETE CASCADE,
   PRIMARY KEY (channel_id, output_id)
 );
+CREATE TABLE IF NOT EXISTS event_members (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  event_id INTEGER NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+  email TEXT NOT NULL COLLATE NOCASE,
+  user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+  added_by INTEGER,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE (event_id, email)
+);
+CREATE INDEX IF NOT EXISTS ix_members_user ON event_members(user_id);
+CREATE INDEX IF NOT EXISTS ix_members_email ON event_members(email);
+CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT);
 CREATE INDEX IF NOT EXISTS ix_cch_event ON console_channels(event_id);
 CREATE INDEX IF NOT EXISTS ix_cout_event ON console_outputs(event_id);
 CREATE INDEX IF NOT EXISTS ix_mics_event ON mics(event_id);
@@ -274,9 +286,15 @@ const isSuper = (u) => u.role === 'superadmin';
 function eventFor(u, id) {
   const ev = get('SELECT * FROM events WHERE id = ?', Number(id));
   if (!ev) throw notFound('Evento não encontrado');
-  if (!isSuper(u) && ev.user_id !== u.id) throw forbid();
+  if (!isSuper(u) && ev.user_id !== u.id && !isMember(ev.id, u)) throw forbid();
   return ev;
 }
+function isMember(evId, u) { return !!get('SELECT 1 FROM event_members WHERE event_id = ? AND (user_id = ? OR email = ?)', evId, u.id, u.email); }
+const canManage = (u, ev) => isSuper(u) || ev.user_id === u.id;
+// convites pendentes passam a acessos quando a pessoa cria conta / entra
+function claimInvites(user) { run('UPDATE event_members SET user_id = ? WHERE email = ? AND user_id IS NULL', user.id, user.email); }
+const setting = (k, def) => { const r = get('SELECT value FROM settings WHERE key = ?', k); return r ? r.value : def; };
+const signupOpen = () => setting('allow_signup', process.env.ALLOW_SIGNUP === 'false' ? '0' : '1') === '1';
 const micFor = (u, id) => { const m = get('SELECT * FROM mics WHERE id = ?', Number(id)); if (!m) throw notFound(); eventFor(u, m.event_id); return m; };
 const blockFor = (u, id) => { const b = get('SELECT * FROM blocks WHERE id = ?', Number(id)); if (!b) throw notFound(); eventFor(u, b.event_id); return b; };
 const slotFor = (u, id) => {
@@ -319,11 +337,37 @@ route('POST', '/api/login', async (req, res, body) => {
   if (!u || !checkPass(String(body.password || ''), u.pass)) throw new HttpError(401, 'Email ou password errados');
   if (!u.active) throw forbid('Conta desativada');
   loginAttempts.delete(ip);
+  claimInvites(u);
   const token = crypto.randomBytes(32).toString('hex');
   run('INSERT INTO sessions (token, user_id, expires) VALUES (?, ?, ?)', token, u.id, Date.now() + SESSION_DAYS * 864e5);
   setSessionCookie(res, token, SESSION_DAYS * 86400);
   return { ok: true };
 }, { public: true });
+
+route('GET', '/api/public/config', () => ({ signup: signupOpen() }), { public: true });
+route('POST', '/api/register', (req, res, body) => {
+  if (!signupOpen()) throw forbid('O registo de novas contas está fechado. Pede uma conta ao administrador.');
+  const ip = req.headers['x-forwarded-for']?.split(',')[0].trim() || req.socket.remoteAddress;
+  rateLimit(ip);
+  const email = s(body.email, 200).toLowerCase(); const name = s(body.name, 120);
+  if (!name) throw bad('Escreve o teu nome');
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw bad('Email inválido');
+  if (String(body.password || '').length < 6) throw bad('A password tem de ter pelo menos 6 caracteres');
+  if (get('SELECT id FROM users WHERE email = ?', email)) throw bad('Já existe uma conta com esse email. Entra com a tua password.');
+  const r = run('INSERT INTO users (email, name, role, pass, max_events) VALUES (?, ?, ?, ?, ?)', email, name, 'user', hashPass(String(body.password)), DEFAULT_MAX_EVENTS);
+  const user = { id: Number(r.lastInsertRowid), email };
+  claimInvites(user);
+  const token = crypto.randomBytes(32).toString('hex');
+  run('INSERT INTO sessions (token, user_id, expires) VALUES (?, ?, ?)', token, user.id, Date.now() + SESSION_DAYS * 864e5);
+  setSessionCookie(res, token, SESSION_DAYS * 86400);
+  return { ok: true, shared: get('SELECT COUNT(*) AS c FROM event_members WHERE user_id = ?', user.id).c };
+}, { public: true });
+route('GET', '/api/admin/settings', (req, res, b, p, u) => { if (!isSuper(u)) throw forbid(); return { allow_signup: signupOpen() }; });
+route('PUT', '/api/admin/settings', (req, res, body, p, u) => {
+  if (!isSuper(u)) throw forbid();
+  if (body.allow_signup != null) run('INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value', 'allow_signup', body.allow_signup ? '1' : '0');
+  return { ok: true };
+});
 
 route('POST', '/api/logout', (req, res) => {
   const tok = parseCookies(req).mdsess;
@@ -396,7 +440,8 @@ route('GET', '/api/limits', (req, res, b, p, u) => {
 });
 route('GET', '/api/events', (req, res, b, p, u, query) => {
   const archived = query.get('archived') === '1' ? 1 : 0;
-  const base = `SELECT e.*, us.name AS owner_name, us.email AS owner_email,
+  const base = `SELECT e.*, us.name AS owner_name, us.email AS owner_email, (e.user_id = ${Number(u.id)}) AS is_owner,
+    (SELECT COUNT(*) FROM event_members WHERE event_id = e.id) AS member_count,
     (SELECT COUNT(*) FROM mics WHERE event_id = e.id) AS mic_count,
     (SELECT COUNT(*) FROM blocks WHERE event_id = e.id) AS block_count,
     (SELECT COUNT(*) FROM mics WHERE event_id = e.id AND battery <= 1) AS low_batt
@@ -407,7 +452,7 @@ route('GET', '/api/events', (req, res, b, p, u, query) => {
     const owner = Number(query.get('user')) || 0;
     return owner ? all(where + ' AND e.user_id = ? ORDER BY e.date DESC, e.id DESC', archived, owner) : all(where + ' ORDER BY e.date DESC, e.id DESC', archived);
   }
-  return all(where + ' AND e.user_id = ? ORDER BY e.date DESC, e.id DESC', archived, u.id);
+  return all(where + ' AND (e.user_id = ? OR e.id IN (SELECT event_id FROM event_members WHERE user_id = ? OR email = ?)) ORDER BY e.date DESC, e.id DESC', archived, u.id, u.id, u.email);
 });
 route('POST', '/api/events', (req, res, body, p, u) => {
   checkLimit(u.id);
@@ -420,7 +465,40 @@ route('POST', '/api/events', (req, res, body, p, u) => {
   }
   return { id };
 });
-route('GET', '/api/events/:id', (req, res, b, p, u) => fullEvent(eventFor(u, p.id)));
+route('GET', '/api/events/:id', (req, res, b, p, u) => {
+  const ev = eventFor(u, p.id);
+  return { ...fullEvent(ev), access: { owner: ev.user_id === u.id, manage: canManage(u, ev) }, members: membersOf(ev.id) };
+});
+function membersOf(evId) {
+  return all(`SELECT m.id, m.email, m.user_id, m.created_at, us.name FROM event_members m LEFT JOIN users us ON us.id = m.user_id
+    WHERE m.event_id = ? ORDER BY m.id`, evId).map((m) => ({ ...m, pending: !m.user_id }));
+}
+route('POST', '/api/events/:id/members', (req, res, body, p, u) => {
+  const ev = eventFor(u, p.id);
+  if (!canManage(u, ev)) throw forbid('Só o dono do evento pode adicionar colegas');
+  const emails = String(body.email || '').split(/[\s,;]+/).map((x) => x.trim().toLowerCase()).filter(Boolean);
+  if (!emails.length) throw bad('Escreve o email do colega');
+  const added = [];
+  for (const email of emails) {
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw bad(`Email inválido: ${email}`);
+    const owner = get('SELECT email FROM users WHERE id = ?', ev.user_id);
+    if (owner && owner.email.toLowerCase() === email) continue;
+    const usr = get('SELECT id FROM users WHERE email = ?', email);
+    run('INSERT OR IGNORE INTO event_members (event_id, email, user_id, added_by) VALUES (?, ?, ?, ?)', ev.id, email, usr ? usr.id : null, u.id);
+    added.push({ email, has_account: !!usr });
+  }
+  broadcast(ev.id);
+  return { added };
+});
+route('DELETE', '/api/events/:id/members/:mid', (req, res, b, p, u) => {
+  const ev = eventFor(u, p.id);
+  const m = get('SELECT * FROM event_members WHERE id = ? AND event_id = ?', p.mid, ev.id); if (!m) throw notFound();
+  const self = m.user_id === u.id || String(m.email).toLowerCase() === String(u.email).toLowerCase();
+  if (!canManage(u, ev) && !self) throw forbid();
+  run('DELETE FROM event_members WHERE id = ?', m.id);
+  broadcast(ev.id);
+  return { ok: true, left: self };
+});
 route('PUT', '/api/events/:id', (req, res, body, p, u) => {
   needWrite(u);
   const ev = eventFor(u, p.id);
@@ -440,8 +518,8 @@ route('PUT', '/api/events/:id', (req, res, body, p, u) => {
   return { ok: true };
 });
 route('DELETE', '/api/events/:id', (req, res, b, p, u) => {
-  needWrite(u);
   const ev = eventFor(u, p.id);
+  if (!canManage(u, ev)) throw forbid('Só o dono do evento o pode apagar');
   run('DELETE FROM events WHERE id = ?', ev.id);
   broadcast(ev.id, { deleted: true });
   return { ok: true };
@@ -449,9 +527,10 @@ route('DELETE', '/api/events/:id', (req, res, b, p, u) => {
 route('POST', '/api/events/:id/duplicate', (req, res, body, p, u) => {
   needWrite(u);
   const ev = eventFor(u, p.id);
-  checkLimit(ev.user_id);
+  const newOwner = isSuper(u) ? ev.user_id : u.id;
+  checkLimit(newOwner);
   return tx(() => {
-    const r = run('INSERT INTO events (user_id, name, date, venue, notes, air_mode) VALUES (?, ?, ?, ?, ?, ?)', ev.user_id, s(body.name, 160) || ev.name + ' (cópia)', s(body.date, 20) || ev.date, ev.venue, ev.notes, ev.air_mode);
+    const r = run('INSERT INTO events (user_id, name, date, venue, notes, air_mode) VALUES (?, ?, ?, ?, ?, ?)', newOwner, s(body.name, 160) || ev.name + ' (cópia)', s(body.date, 20) || ev.date, ev.venue, ev.notes, ev.air_mode);
     const nid = Number(r.lastInsertRowid);
     const micMap = {};
     for (const m of all('SELECT * FROM mics WHERE event_id = ? ORDER BY sort, id', ev.id)) {

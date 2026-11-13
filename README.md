@@ -35,7 +35,13 @@ App web (iPad, telemóvel e PC) para gerir microfones, pilhas e o alinhamento de
 - **Grelha de micros no Alinhamento**: mostra o evento inteiro de uma vez. Para dar um micro a alguém nesse bloco, toca numa célula vazia.
   - Ao escolher o micro para um orador, cada opção diz se o micro está livre ou quem o teve nos 2 blocos anteriores.
 - **Criar ou editar um bloco com previsão**: ao escrever os oradores e escolher os micros, aparece por baixo de cada um se o micro está ✓ livre, se é preciso ↺ **recolher de** alguém (e de que bloco) ou se está repetido. Há também uma grelha com os 3 blocos anteriores, o bloco novo e o seguinte. Ao editar um bloco, também se mudam, juntam ou tiram oradores.
-- **Utilizadores**: só o super admin (tu) cria utilizadores (os teus colegas). Cada utilizador só vê e gere os seus próprios eventos; o super admin vê os eventos de todos e pode filtrar por utilizador.
+- **Página principal e contas**: a página inicial apresenta a app e tem **Entrar** e **Criar conta**. Qualquer pessoa pode criar conta com o email. O super admin pode fechar os registos em *Utilizadores*, e também criar contas à mão.
+- **Equipa do evento**: em *Evento → Equipa do evento*, o dono do evento adiciona colegas pelo email.
+  - Os colegas veem e editam o evento em tempo real.
+  - Só o dono pode apagar o evento e gerir a equipa.
+  - Se o colega ainda não tem conta, fica com um convite pendente. Quando criar conta com esse email, o evento aparece-lhe automaticamente.
+  - O botão "Copiar mensagem de convite" prepara o texto para mandar por WhatsApp ou email.
+- **Privacidade**: cada utilizador vê os seus eventos e os que foram partilhados com ele. O super admin vê todos.
 - **Limite de eventos**: cada utilizador pode ter até **5 eventos** (o super admin muda o limite por utilizador; 0 = sem limite). Ao chegar ao limite aparece um aviso com a lista dos eventos, passados primeiro, para apagar.
 - **Criar evento**: só o nome é obrigatório; data, local, modo ON AIR e micros base estão em *Mais opções*.
 - Duplicar eventos (para reutilizar micros e alinhamento) e arquivar.
@@ -118,5 +124,6 @@ Na app há o botão **📲 Instalar app**: aparece no ecrã de login, no aviso d
 | `ADMIN_PASSWORD` | (aleatória) | Password do super admin no 1º arranque |
 | `COOKIE_SECURE` | false | `true` quando a app estiver atrás de HTTPS |
 | `SESSION_DAYS` | 30 | Dias até a sessão expirar |
+| `ALLOW_SIGNUP` | true | `false` fecha o registo de contas no primeiro arranque. Depois disso, muda-se no painel |
 | `DEFAULT_MAX_EVENTS` | 5 | Limite de eventos para novos utilizadores |
 | `DATA_DIR` | /data | Pasta da base de dados |
