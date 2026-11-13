@@ -1,5 +1,5 @@
 # Usar no Portainer > Stacks > Add stack > Web editor
-# (a imagem micdesk:latest tem de ser construída antes — ver LEIA-ME.md, passo 2)
+# (a imagem micdesk:latest tem de ser construída antes — ver README.md, passo 2)
 services:
   micdesk:
     image: micdesk:latest
