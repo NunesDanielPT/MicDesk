@@ -32,6 +32,12 @@ App web (iPad, telemóvel e PC) para gerir microfones, pilhas e o alinhamento de
   - Cada célula diz quem tem aquele micro naquele bloco.
   - **↺ de X** indica que o micro muda de pessoa; **recolher de X** indica que é preciso tirá-lo a quem está no ar agora.
   - No topo aparecem o relógio, o bloco no ar, o seguinte, o número de trocas e as pilhas fracas.
+- **Micado / Por micar**: cada orador com micro tem um botão para marcar quando já tem o micro posto.
+  - O cabeçalho do bloco mostra quantos já estão micados (ex.: "1/6 micados").
+  - As grelhas mostram "🎙 micado" ou "por micar".
+  - No Ao vivo aparece quantas pessoas do próximo bloco ainda faltam micar. Tocar numa célula fora da coluna ON AIR marca essa pessoa como micada.
+  - Se mudares o micro de um orador, ele volta a "por micar". O púlpito e os micros de ambiente não usam este estado.
+  - Fica tudo registado no histórico: "Rui micou Ana Branquinho (micro 4)".
 - **Grelha de micros no Alinhamento**: mostra o evento inteiro de uma vez. Para dar um micro a alguém nesse bloco, toca numa célula vazia.
   - Ao escolher o micro para um orador, cada opção diz se o micro está livre ou quem o teve nos 2 blocos anteriores.
 - **Criar ou editar um bloco com previsão**: ao escrever os oradores e escolher os micros, aparece por baixo de cada um se o micro está ✓ livre, se é preciso ↺ **recolher de** alguém (e de que bloco) ou se está repetido. Há também uma grelha com os 3 blocos anteriores, o bloco novo e o seguinte. Ao editar um bloco, também se mudam, juntam ou tiram oradores.

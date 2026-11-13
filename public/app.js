@@ -640,6 +640,7 @@ function viewRundown() {
         <div class="name" ${w ? `data-editslot="${sl.id}" style="cursor:pointer"` : ''}><b>${esc(sl.speaker || '(sem nome)')}</b>
           ${sl.role ? `<span class="muted small">${esc(sl.role)}</span>` : ''}
           ${warns.length ? `<div class="warns">${warns.join('')}</div>` : ''}</div>
+        ${mikBtn(sl, m, w)}
         ${m ? batt(m.battery) : ''}
         ${micSelect(sl, mics, a.micById)}
       </div>`;
@@ -647,7 +648,7 @@ function viewRundown() {
     return `<div class="card block ${isCur ? 'current' : ''} ${past ? 'past' : ''}" id="b${b.id}">
       <div class="bh">
         <div class="time">${esc(b.start_time || '--:--')}${b.end_time ? `<small>até ${esc(b.end_time)}</small>` : ''}</div>
-        <div class="title">${isCur ? '<span class="onair">ON AIR</span> <span class="tmini" data-t="mini"></span>' : ''}<b>${esc(b.title || (b.slots.length > 1 ? `Painel · ${b.slots.length} oradores` : 'Orador'))}</b>
+        <div class="title">${isCur ? '<span class="onair">ON AIR</span> <span class="tmini" data-t="mini"></span>' : ''}<b>${esc(b.title || (b.slots.length > 1 ? `Painel · ${b.slots.length} oradores` : 'Orador'))}</b>${(() => { const need = b.slots.filter((x) => needsMiking(a.micById[x.mic_id])); if (!need.length) return ''; const ok = need.filter((x) => x.miked).length; return `<span class="mikcount ${ok === need.length ? 'all' : ''}">${MIK_ICON} ${ok}/${need.length} micados</span>`; })()}
           ${b.notes ? `<span class="muted small">${esc(b.notes)}</span>` : ''}</div>
         ${w ? `<button class="btn sm ${isCur ? 'airoff' : 'airsoft'}" data-setcur="${b.id}">${isCur ? 'Tirar do ar' : '● Pôr no ar'}</button>
         <button class="btn sm icon ghost" data-editblock="${b.id}" aria-label="Editar">✎</button>` : ''}
@@ -938,6 +939,11 @@ function micModal(m) {
   }).catch(() => { });
 }
 
+// ---- micado / por micar ----
+const MIK_ICON = '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M6 11a6 6 0 0 0 12 0M12 17v4"/></svg>';
+const needsMiking = (m) => m && !['pulpito', 'ambiente'].includes(m.type);
+const mikBtn = (sl, m, w) => !needsMiking(m) ? '' : `<button class="mik ${sl.miked ? 'on' : ''}" data-miked="${sl.id}" ${w ? '' : 'disabled'} title="${sl.miked ? 'Micado — toca para desfazer' : 'Por micar — toca quando o micro estiver colocado'}">${MIK_ICON}<span>${sl.miked ? 'Micado' : 'Por micar'}</span></button>`;
+
 // ---- ocupação dos micros por bloco ----
 function occupancy() {
   const { blocks } = state.ev;
@@ -1006,7 +1012,9 @@ function micGrid(cols, { airId, editable, live } = {}) {
     else if (swap) sub = `<span class="gs ${fromAir ? 'warn' : 'swap'}">${fromAir ? 'recolher de' : '↺ de'} ${esc(shortName(ph.speaker))}</span>`;
     else if (cont) sub = '<span class="gs cont">→ continua</span>';
     const names = here.map((sl) => `<span class="gn ${sl.done ? 'done' : ''}">${esc(sl.speaker)}</span>`).join('');
-    const act = b.id === airId && live ? `data-done="${here[0].id}"` : editable ? `data-editslot="${here[0].id}"` : '';
+    if (needsMiking(m)) sub += here[0].miked ? '<span class="gs mk">🎙 micado</span>' : '<span class="gs nomk">por micar</span>';
+    // ao vivo: na coluna ON AIR o toque marca ✓ feito; nas outras marca micado
+    const act = live ? (b.id === airId ? `data-done="${here[0].id}"` : needsMiking(m) ? `data-miked="${here[0].id}"` : '') : editable ? `data-editslot="${here[0].id}"` : '';
     return `<td class="gused${air}${swap ? ' gswap' : ''}${dup ? ' gdup' : ''}"><button class="gc ${live && b.id === airId && here[0].done ? 'on' : ''}" ${act} style="--mc:${esc(m.color)}">${names}${sub}</button></td>`;
   };
   const body = rows.map((m) => `<tr><td class="sticky"><div class="gm">${chip(m)}<div class="gmi"><b>${esc(m.person || TYPES[m.type])}</b><small>${m.person ? TYPES[m.type] : ''}${m.channel ? `${m.person ? ' · ' : ''}canal ${esc(m.channel)}` : ''}</small></div>${batt(m.battery)}</div></td>${cols.map((b) => cell(b, m)).join('')}</tr>`).join('');
@@ -1037,6 +1045,7 @@ function viewLive() {
       <div class="livesum">
         ${cur ? `<div><span class="label-up" style="color:var(--air)">No ar</span><b class="bigtime sm">${esc(cur.start_time || '--:--')}</b></div>` : '<div><span class="label-up">No ar</span><b class="muted">—</b></div>'}
         ${next ? `<div><span class="label-up">A seguir</span><b class="bigtime sm">${esc(next.start_time || '--:--')}</b></div>` : ''}
+        ${next ? (() => { const need = next.slots.filter((x) => needsMiking(mics.find((m) => m.id === x.mic_id))); const miss = need.filter((x) => !x.miked).length; return need.length ? `<div><span class="label-up">Por micar</span><b class="bigtime sm" style="color:${miss ? 'var(--warn)' : 'var(--accent)'}">${miss ? miss : '✓'}</b></div>` : ''; })() : ''}
         ${next ? `<div><span class="label-up">Trocas</span><b class="bigtime sm" style="color:${swaps ? 'var(--warn)' : 'var(--accent)'}">${swaps}</b></div>` : ''}
         ${lowNext.length ? `<div><span class="label-up">Pilhas</span><b class="bigtime sm" style="color:var(--danger)">⚠ ${lowNext.map((m) => esc(m.label)).join(', ')}</b></div>` : ''}
       </div>
@@ -1048,7 +1057,7 @@ function viewLive() {
     </div>
     ${timerPanel()}
     ${blocks.length ? `<div class="card gridwrap live">${micGrid(cols, { airId: a.currentId, live: true })}</div>
-    <p class="small muted">Mostra os 2 blocos anteriores, o que está ON AIR e os seguintes. <span class="lg-warn">recolher de</span> = tirar o micro a quem está no ar agora para dar ao próximo. Toca num nome na coluna ON AIR para marcar como ✓ feito.</p>`
+    <p class="small muted">Mostra os 2 blocos anteriores, o que está ON AIR e os seguintes. <span class="lg-warn">recolher de</span> = tirar o micro a quem está no ar agora para dar ao próximo. Toca num nome na coluna ON AIR para marcar como ✓ feito; noutra coluna, para marcar como <b>micado</b>.</p>`
     : '<div class="card empty">Sem alinhamento.</div>'}`;
 }
 
@@ -1302,6 +1311,14 @@ function bindEvent(tab) {
       });
     }
     if (t('[data-stage]')) return openStage();
+    if ((el = t('[data-miked]'))) {
+      const id = Number(el.dataset.miked);
+      let cur = null; for (const b of state.ev.blocks) { const x = b.slots.find((y) => y.id === id); if (x) cur = x; }
+      if (!cur) return;
+      const on = !cur.miked; cur.miked = on ? 1 : 0;
+      if (el.classList.contains('mik')) { el.classList.toggle('on', on); $('span', el).textContent = on ? 'Micado' : 'Por micar'; }
+      await act(() => api('PUT', `/api/slots/${id}`, { miked: on })); return scheduleReload();
+    }
     if (t('[data-notifperm]')) { try { await Notification.requestPermission(); } catch { } return renderEvent('log'); }
     if ((el = t('[data-rmmember]'))) {
       const m = state.ev.members.find((x) => x.id === Number(el.dataset.rmmember));

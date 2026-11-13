@@ -147,6 +147,8 @@ CREATE INDEX IF NOT EXISTS ix_slots_block ON slots(block_id);
   const cols = db.prepare('PRAGMA table_info(events)').all().map((c) => c.name);
   if (!cols.includes('air_mode')) db.exec("ALTER TABLE events ADD COLUMN air_mode TEXT NOT NULL DEFAULT 'ask'");
   if (!cols.includes('on_air_at')) db.exec('ALTER TABLE events ADD COLUMN on_air_at TEXT');
+  const scols = db.prepare('PRAGMA table_info(slots)').all().map((c) => c.name);
+  if (!scols.includes('miked')) db.exec('ALTER TABLE slots ADD COLUMN miked INTEGER NOT NULL DEFAULT 0');
   if (!cols.includes('console_model')) db.exec("ALTER TABLE events ADD COLUMN console_model TEXT DEFAULT ''");
   if (cols.includes('org_id')) {
     // sem clientes: cada evento passa a pertencer a um utilizador
@@ -288,6 +290,7 @@ function slotDiff(sl, body, micId, blockId) {
   const out = [];
   const name = s(body.speaker ?? sl.speaker, 160);
   if (body.done != null && (body.done ? 1 : 0) !== sl.done) out.push(`${body.done ? 'marcou ✓' : 'desmarcou'} ${name}`);
+  if (body.miked != null && (body.miked ? 1 : 0) !== sl.miked) out.push(body.miked ? `micou ${name}${micId ? ' (micro ' + micLabel(micId) + ')' : ''}` : `marcou ${name} como por micar`);
   if (name !== sl.speaker) out.push(`mudou o nome ${sl.speaker} → ${name}`);
   if (micId !== sl.mic_id) out.push(`mudou o micro de ${name} (${blkTime(blockId)}): ${micLabel(sl.mic_id)} → ${micLabel(micId)}`);
   if (blockId !== sl.block_id) out.push(`passou ${name} do bloco ${blkTime(sl.block_id)} para ${blkTime(blockId)}`);
@@ -773,8 +776,10 @@ route('PUT', '/api/slots/:id', (req, res, body, p, u) => {
     const nb = get('SELECT id FROM blocks WHERE id = ? AND event_id = ?', Number(body.block_id), sl.event_id);
     if (nb) blockId = nb.id;
   }
-  run('UPDATE slots SET speaker=?, role=?, mic_id=?, done=?, block_id=? WHERE id=?',
-    s(body.speaker ?? sl.speaker, 160), s(body.role ?? sl.role, 80), micId, body.done == null ? sl.done : (body.done ? 1 : 0), blockId, sl.id);
+  // trocar de micro → volta a "por micar" (a não ser que venha explícito)
+  const miked = body.miked != null ? (body.miked ? 1 : 0) : (micId !== sl.mic_id ? 0 : sl.miked);
+  run('UPDATE slots SET speaker=?, role=?, mic_id=?, done=?, block_id=?, miked=? WHERE id=?',
+    s(body.speaker ?? sl.speaker, 160), s(body.role ?? sl.role, 80), micId, body.done == null ? sl.done : (body.done ? 1 : 0), blockId, miked, sl.id);
   changed(u, sl.event_id, slotDiff(sl, body, micId, blockId));
   return { ok: true };
 });
