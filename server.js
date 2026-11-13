@@ -127,6 +127,24 @@ CREATE TABLE IF NOT EXISTS event_members (
 CREATE INDEX IF NOT EXISTS ix_members_user ON event_members(user_id);
 CREATE INDEX IF NOT EXISTS ix_members_email ON event_members(email);
 CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT);
+CREATE TABLE IF NOT EXISTS chat_messages (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  event_id INTEGER NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+  user_id INTEGER,
+  user_name TEXT NOT NULL DEFAULT '',
+  kind TEXT NOT NULL DEFAULT 'text',
+  text TEXT NOT NULL DEFAULT '',
+  meta TEXT,
+  target_user_id INTEGER,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS ix_chat_event ON chat_messages(event_id, id);
+CREATE TABLE IF NOT EXISTS chat_reads (
+  event_id INTEGER NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  last_read_id INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (event_id, user_id)
+);
 CREATE TABLE IF NOT EXISTS receivers (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   name TEXT NOT NULL DEFAULT '',
@@ -283,7 +301,14 @@ function broadcast(eventId, payload = {}) {
   const msg = `data: ${JSON.stringify({ type: 'changed', ...payload })}\n\n`;
   for (const r of set) { try { r.write(msg); } catch { } }
 }
+const userStreams = new Map(); // userId -> Set(res)  (chat e chamadas chegam em qualquer página)
+function sendUser(uid, payload) {
+  const set = userStreams.get(Number(uid)); if (!set) return;
+  const msg = `data: ${JSON.stringify(payload)}\n\n`;
+  for (const r of set) { try { r.write(msg); } catch { } }
+}
 setInterval(() => {
+  for (const set of userStreams.values()) for (const r of set) { try { r.write(': ping\n\n'); } catch { } }
   for (const set of streams.values()) for (const r of set) { try { r.write(': ping\n\n'); } catch { } }
 }, 25000).unref();
 
@@ -770,7 +795,8 @@ route('PUT', '/api/blocks/:id', (req, res, body, p, u) => {
   run('UPDATE blocks SET start_time=?, end_time=?, title=?, kind=?, notes=? WHERE id=?',
     body.start_time === undefined ? b.start_time : normTime(body.start_time), body.end_time === undefined ? b.end_time : normTime(body.end_time),
     s(body.title ?? b.title, 200), body.kind ? (body.kind === 'intervalo' ? 'intervalo' : 'painel') : b.kind, s(body.notes ?? b.notes, 2000), b.id);
-  { const nt = body.start_time === undefined ? b.start_time : normTime(body.start_time); changed(u, b.event_id, nt !== b.start_time ? `mudou a hora do bloco ${b.start_time || '--:--'} para ${nt || '--:--'}` : `editou o bloco ${b.start_time || ''} ${s(body.title ?? b.title)}`.trim()); }
+  { const nt = body.start_time === undefined ? b.start_time : normTime(body.start_time); changed(u, b.event_id, nt !== b.start_time ? `mudou a hora do bloco ${b.start_time || '--:--'} para ${nt || '--:--'}` : `editou o bloco ${b.start_time || ''} ${s(body.title ?? b.title)}`.trim());
+    if (nt !== b.start_time) systemChat(u, b.event_id, `🕐 mudou a hora do bloco ${b.title ? '"' + b.title + '" ' : ''}${b.start_time || '--:--'} → ${nt || '--:--'}`); }
   return { ok: true };
 });
 // mover um bloco para antes/depois de outro (troca horários ou hora escolhida), numa só operação
@@ -786,6 +812,9 @@ route('POST', '/api/blocks/:id/move', (req, res, body, p, u) => {
   changed(u, b.event_id, other && body.other_start !== undefined
     ? `trocou a ordem dos blocos: ${b.start_time || '--:--'} ${b.title || ''} passou para ${nb || '--:--'} e ${other.start_time || '--:--'} ${other.title || ''} para ${normTime(body.other_start) || '--:--'}`.replace(/\s+/g, ' ')
     : `moveu o bloco ${b.start_time || '--:--'} ${b.title || ''} para as ${nb || '--:--'}`.replace(/\s+/g, ' '));
+  systemChat(u, b.event_id, other && body.other_start !== undefined
+    ? `🔀 trocou a ordem do alinhamento: o bloco ${b.title ? '"' + b.title + '" ' : ''}das ${b.start_time || '--:--'} passa para as ${nb || '--:--'} e o das ${other.start_time || '--:--'} passa para as ${normTime(body.other_start) || '--:--'}`
+    : other && body.swap_sort ? `🔀 trocou a ordem de dois blocos do alinhamento` : `🔀 mudou o bloco ${b.title ? '"' + b.title + '" ' : ''}das ${b.start_time || '--:--'} para as ${nb || '--:--'}`);
   return { ok: true };
 });
 route('DELETE', '/api/blocks/:id', (req, res, b, p, u) => {
@@ -794,6 +823,7 @@ route('DELETE', '/api/blocks/:id', (req, res, b, p, u) => {
   run('DELETE FROM blocks WHERE id = ?', bl.id);
   run('UPDATE events SET current_block_id = NULL WHERE id = ? AND current_block_id = ?', bl.event_id, bl.id);
   changed(u, bl.event_id, `apagou o bloco ${bl.start_time || ''} ${bl.title || ''}`.trim());
+  systemChat(u, bl.event_id, `🗑 apagou do alinhamento o bloco ${bl.start_time || ''} ${bl.title || ''}`.trim());
   return { ok: true };
 });
 
@@ -835,6 +865,7 @@ route('PUT', '/api/slots/:id', (req, res, body, p, u) => {
       if (later.has(o.block_id) && o.speaker.trim().toLowerCase() === name && o.miked !== miked) { run('UPDATE slots SET miked = ? WHERE id = ?', miked, o.id); propagated++; }
     }
   }
+  if (blockId !== sl.block_id) systemChat(u, sl.event_id, `🔀 passou ${s(body.speaker ?? sl.speaker, 160)} do bloco ${blkTime(sl.block_id)} para o bloco ${blkTime(blockId)}`);
   changed(u, sl.event_id, slotDiff(sl, body, micId, blockId) + (propagated ? ` (e em mais ${propagated} bloco${propagated > 1 ? 's' : ''} seguinte${propagated > 1 ? 's' : ''})` : ''));
   return { ok: true, propagated };
 });
@@ -1031,6 +1062,106 @@ route('GET', '/api/events/:id/log', (req, res, b, p, u, query) => {
   return who ? all('SELECT id, user_id, user_name, msg, at FROM event_log WHERE event_id = ? AND user_id = ? ORDER BY id DESC LIMIT ?', ev.id, who, lim)
     : all('SELECT id, user_id, user_name, msg, at FROM event_log WHERE event_id = ? ORDER BY id DESC LIMIT ?', ev.id, lim);
 });
+
+// ---------- chat do evento ----------
+// participantes: dono, colegas adicionados e quem já participou no chat (ex.: super admin)
+function participantsOf(evId) {
+  const ev = get('SELECT user_id FROM events WHERE id = ?', evId); if (!ev) return [];
+  const ids = new Set([ev.user_id]);
+  for (const r of all('SELECT user_id FROM event_members WHERE event_id = ? AND user_id IS NOT NULL', evId)) ids.add(r.user_id);
+  for (const r of all('SELECT user_id FROM chat_reads WHERE event_id = ?', evId)) ids.add(r.user_id);
+  return all(`SELECT id, name, email FROM users WHERE active = 1 AND id IN (${[...ids].map(Number).join(',') || 0}) ORDER BY name COLLATE NOCASE`);
+}
+function chatRow(m) { let meta = null; try { meta = m.meta ? JSON.parse(m.meta) : null; } catch { } return { ...m, meta }; }
+function postChat(evId, u, { kind = 'text', text = '', meta = null, target = null } = {}) {
+  const r = run('INSERT INTO chat_messages (event_id, user_id, user_name, kind, text, meta, target_user_id) VALUES (?,?,?,?,?,?,?)',
+    evId, u ? u.id : null, u ? (u.name || u.email) : 'MicDesk', kind, String(text).slice(0, 2000), meta ? JSON.stringify(meta) : null, target);
+  const msg = chatRow(get('SELECT * FROM chat_messages WHERE id = ?', Number(r.lastInsertRowid)));
+  if (u) run('INSERT INTO chat_reads (event_id, user_id, last_read_id) VALUES (?,?,?) ON CONFLICT(event_id, user_id) DO UPDATE SET last_read_id = MAX(last_read_id, excluded.last_read_id)', evId, u.id, msg.id);
+  const evName = get('SELECT name FROM events WHERE id = ?', evId)?.name || '';
+  for (const pu of participantsOf(evId)) sendUser(pu.id, { type: 'chat', event_id: evId, event_name: evName, message: msg });
+  return msg;
+}
+// mensagem automática para toda a equipa quando o alinhamento muda de ordem/horário
+function systemChat(u, evId, text) {
+  try {
+    const m = String(text).match(/^(\S+)\s+(.*)$/s); // "🔀 trocou…" → "🔀 Rui trocou…"
+    const who = u ? (u.name || u.email) + ' ' : '';
+    postChat(evId, null, { kind: 'system', text: m && !/[a-zà-ú0-9]/i.test(m[1]) ? `${m[1]} ${who}${m[2]}` : `${who}${text}` });
+  } catch (e) { console.error(e); }
+}
+
+const CHAT_ACTIONS = {
+  batteries: { label: 'Troquei as pilhas', emoji: '🔋', apply: (m) => ({ battery: 3, battery_at: true }) },
+  lowbatt: { label: 'Pilhas fracas', emoji: '🪫', apply: (m) => ({ battery: 1, battery_at: true }) },
+  broken: { label: 'Micro com problema', emoji: '🛠', apply: () => ({ status: 'avaria' }) },
+  fixed: { label: 'Micro operacional outra vez', emoji: '✅', apply: () => ({ status: 'ok' }) },
+};
+route('GET', '/api/events/:id/chat', (req, res, b, p, u, query) => {
+  const ev = eventFor(u, p.id);
+  const after = Number(query.get('after')) || 0;
+  const rows = after ? all('SELECT * FROM chat_messages WHERE event_id = ? AND id > ? ORDER BY id', ev.id, after)
+    : all('SELECT * FROM (SELECT * FROM chat_messages WHERE event_id = ? ORDER BY id DESC LIMIT 300) ORDER BY id', ev.id);
+  return {
+    messages: rows.map(chatRow),
+    reads: all('SELECT r.user_id, r.last_read_id, us.name FROM chat_reads r JOIN users us ON us.id = r.user_id WHERE r.event_id = ?', ev.id),
+    participants: participantsOf(ev.id), actions: Object.fromEntries(Object.entries(CHAT_ACTIONS).map(([k, a]) => [k, { label: a.label, emoji: a.emoji }])),
+  };
+});
+route('POST', '/api/events/:id/chat', (req, res, body, p, u) => {
+  const ev = eventFor(u, p.id);
+  if (body.action) {
+    const a = CHAT_ACTIONS[body.action]; if (!a) throw bad('Ação desconhecida');
+    const ids = (Array.isArray(body.mic_ids) ? body.mic_ids : []).map(Number);
+    const mics = ids.length ? all(`SELECT * FROM mics WHERE event_id = ? AND id IN (${ids.join(',')}) ORDER BY sort, id`, ev.id) : [];
+    if (!mics.length) throw bad('Escolhe pelo menos um micro');
+    tx(() => {
+      for (const m of mics) {
+        const ch = a.apply(m);
+        if (ch.battery != null) {
+          run("UPDATE mics SET battery = ?, battery_at = datetime('now') WHERE id = ?", ch.battery, m.id);
+          run('INSERT INTO battery_log (mic_id, level, user_name) VALUES (?,?,?)', m.id, ch.battery, u.name || u.email);
+        }
+        if (ch.status) run('UPDATE mics SET status = ? WHERE id = ?', ch.status, m.id);
+      }
+    });
+    const labels = mics.map((m) => m.label);
+    const txt = `${a.emoji} ${a.label}: ${labels.length > 1 ? 'micros ' : 'micro '}${labels.join(', ')}${s(body.text) ? ' — ' + s(body.text, 500) : ''}`;
+    changed(u, ev.id, `${a.label.toLowerCase()} (chat): ${labels.join(', ')}`);
+    return postChat(ev.id, u, { kind: 'action', text: txt, meta: { action: body.action, mics: mics.map((m) => ({ id: m.id, label: m.label, color: m.color })) } });
+  }
+  if (body.call) {
+    const target = body.target_user_id ? Number(body.target_user_id) : null;
+    const tu = target ? participantsOf(ev.id).find((x) => x.id === target) : null;
+    if (target && !tu) throw bad('Essa pessoa não está na equipa deste evento');
+    const txt = s(body.text, 300) || 'Preciso de ti';
+    return postChat(ev.id, u, { kind: 'call', text: txt, target, meta: { target_name: tu ? (tu.name || tu.email) : 'Todos' } });
+  }
+  const txt = s(body.text, 2000); if (!txt) throw bad('Mensagem vazia');
+  return postChat(ev.id, u, { kind: body.kind === 'reply' ? 'reply' : 'text', text: txt });
+});
+route('POST', '/api/events/:id/chat/read', (req, res, body, p, u) => {
+  const ev = eventFor(u, p.id);
+  const last = Number(body.last_id) || (get('SELECT MAX(id) AS m FROM chat_messages WHERE event_id = ?', ev.id).m || 0);
+  run('INSERT INTO chat_reads (event_id, user_id, last_read_id) VALUES (?,?,?) ON CONFLICT(event_id, user_id) DO UPDATE SET last_read_id = MAX(last_read_id, excluded.last_read_id)', ev.id, u.id, last);
+  for (const pu of participantsOf(ev.id)) sendUser(pu.id, { type: 'chat_read', event_id: ev.id, user_id: u.id, name: u.name || u.email, last_read_id: last });
+  return { ok: true };
+});
+// mensagens por ler, por evento (para os avisos na lista de eventos)
+route('GET', '/api/me/unread', (req, res, b, p, u) => {
+  const rows = all(`SELECT m.event_id, COUNT(*) AS n FROM chat_messages m
+    LEFT JOIN chat_reads r ON r.event_id = m.event_id AND r.user_id = ?
+    WHERE m.id > COALESCE(r.last_read_id, 0) AND (m.user_id IS NULL OR m.user_id != ?)
+      AND (m.event_id IN (SELECT id FROM events WHERE user_id = ?) OR m.event_id IN (SELECT event_id FROM event_members WHERE user_id = ?) OR r.user_id IS NOT NULL)
+    GROUP BY m.event_id`, u.id, u.id, u.id, u.id);
+  return Object.fromEntries(rows.map((r) => [r.event_id, r.n]));
+});
+route('GET', '/api/me/stream', (req, res, b, p, u) => {
+  res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache, no-transform', Connection: 'keep-alive', 'X-Accel-Buffering': 'no' });
+  res.write('retry: 3000\n\n');
+  const set = userStreams.get(u.id) || new Set(); set.add(res); userStreams.set(u.id, set);
+  req.on('close', () => { set.delete(res); if (!set.size) userStreams.delete(u.id); });
+}, { stream: true });
 
 // live stream
 route('GET', '/api/events/:id/stream', (req, res, b, p, u) => {

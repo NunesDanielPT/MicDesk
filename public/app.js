@@ -147,6 +147,7 @@ async function boot() {
     const me = await fetch('/api/me', { credentials: 'same-origin' });
     if (me.ok) { const d = await me.json(); state.me = d.user; state.types = d.types; state.colors = d.colors; }
   } catch { }
+  if (state.me) startUserStream();
   render();
 }
 
@@ -201,6 +202,7 @@ function scheduleReload() {
     setTimeout(() => checkAir().catch(() => { }), 300);
     const ae = document.activeElement;
     if (ae && ae.closest && ae.closest('.addslot') && ae.value) { state.pendingRender = true; return; }
+    if (ae && ae.closest && ae.closest('#chatform, #quick')) return; // não interromper quem está a escrever no chat
     render();
   }, 120);
 }
@@ -261,7 +263,7 @@ document.addEventListener('click', async (e) => {
   if (dd && !e.target.closest('.dropdown')) dd.classList.add('hide');
   if (e.target.closest('[data-install]')) { $('#dd')?.classList.add('hide'); return installModal(); }
   if (e.target.closest('[data-dismissinstall]')) { try { localStorage.setItem('md_noinstall', '1'); } catch { } e.target.closest('.installbar')?.remove(); return; }
-  if (e.target.closest('[data-logout]')) { await api('POST', '/api/logout'); state.me = null; stopStream(); go('#/login'); }
+  if (e.target.closest('[data-logout]')) { await api('POST', '/api/logout'); state.me = null; stopStream(); stopUserStream(); go('#/login'); }
 });
 
 // ---------- instalar como app (PWA) ----------
@@ -446,6 +448,7 @@ async function renderLogin() {
       else await api('POST', '/api/login', formData(e.target));
       const d = await api('GET', '/api/me');
       state.me = d.user; state.types = d.types; state.colors = d.colors; state.authMode = 'login';
+      startUserStream();
       if (mode === 'signup') toast(shared ? `Bem-vindo! Já tens ${shared} evento(s) partilhado(s) contigo.` : 'Conta criada. Bem-vindo à MicDesk!');
       go(location.hash.startsWith('#/e/') ? location.hash : '#/');
     } catch (err) { toast(err.message, true); btn.disabled = false; }
@@ -459,6 +462,7 @@ async function renderHome() {
   const qs = new URLSearchParams();
   if (state.showArchived) qs.set('archived', '1');
   if (sa && state.ownerFilter) qs.set('user', state.ownerFilter);
+  await loadUnread();
   const [events, users, lim] = await Promise.all([
     api('GET', '/api/events?' + qs),
     sa ? api('GET', '/api/users') : Promise.resolve([]),
@@ -471,7 +475,7 @@ async function renderHome() {
           <div class="muted small">${[e.date && esc(fmtDate(e.date)), e.venue && esc(e.venue), sa && '<span style="color:var(--info)">' + esc(e.owner_name || e.owner_email) + '</span>'].filter(Boolean).join(' · ')}</div></div>
         <div class="row" style="gap:6px">${!sa && !e.is_owner ? `<span class="pill info">👥 de ${esc(e.owner_name || e.owner_email)}</span>` : ''}${e.date === today ? '<span class="pill ok">Hoje</span>' : ''}</div>
       </div>
-      <div class="pills"><span class="pill">${e.mic_count} micros</span>${e.member_count ? `<span class="pill">👥 ${e.member_count + 1} na equipa</span>` : ''}<span class="pill">${e.block_count} blocos</span>
+      <div class="pills">${unreadFor(e.id) ? `<span class="pill chatpill">💬 ${unreadFor(e.id)} nova${unreadFor(e.id) > 1 ? 's' : ''}</span>` : ''}<span class="pill">${e.mic_count} micros</span>${e.member_count ? `<span class="pill">👥 ${e.member_count + 1} na equipa</span>` : ''}<span class="pill">${e.block_count} blocos</span>
         ${e.low_batt ? `<span class="pill warn">${e.low_batt} pilhas baixas</span>` : ''}</div>
     </a>`;
   const content = `
@@ -581,7 +585,7 @@ function micSelect(slot, mics, micById) {
 function renderEvent(tab) {
   const { event, owner } = state.ev;
   const tabs = `<nav class="tabs">
-    ${[['rundown', 'Alinhamento'], ['mics', 'Micros'], ['live', 'Ao vivo'], ['desk', 'Mesa'], ['log', 'Histórico'], ['settings', 'Evento']].map(([k, l]) => `<a class="tab ${tab === k ? 'on' : ''}" href="#/e/${event.id}/${k}">${l}</a>`).join('')}
+    ${[['rundown', 'Alinhamento'], ['mics', 'Micros'], ['live', 'Ao vivo'], ['chat', 'Chat'], ['desk', 'Mesa'], ['log', 'Histórico'], ['settings', 'Evento']].map(([k, l]) => `<a class="tab ${tab === k ? 'on' : ''}" href="#/e/${event.id}/${k}">${k === 'chat' ? '💬 ' : ''}${l}${k === 'chat' ? `<span class="tbadge ${unreadFor(event.id) ? '' : 'hide'}" data-unread="${event.id}">${unreadFor(event.id)}</span>` : ''}</a>`).join('')}
   </nav>`;
   const crumb = `<span class="livedot ${state.live ? 'on' : ''}" title="Sincronização em tempo real"></span>${esc(event.name)}`;
   let content = '';
@@ -590,6 +594,7 @@ function renderEvent(tab) {
   else if (tab === 'settings') content = viewSettings();
   else if (tab === 'desk') content = viewDesk();
   else if (tab === 'log') content = viewLog();
+  else if (tab === 'chat') content = viewChat();
   else content = viewRundown();
   const head = tab === 'live' ? '' : `<div class="row" style="justify-content:space-between;flex-wrap:wrap;gap:6px">
       <div style="min-width:0"><h1>${esc(event.name)}</h1><div class="muted small">${esc(fmtDate(event.date))}${event.venue ? ' · ' + esc(event.venue) : ''}${isSuper() && owner ? ' · <span style="color:var(--info)">' + esc(owner.name || owner.email) + '</span>' : ''}</div></div></div>`;
@@ -599,9 +604,11 @@ function renderEvent(tab) {
   app.innerHTML = shell(head + content, { crumb, tabs, wide: tab === 'live' || (tab === 'rundown' && state.rview === 'grid') || tab === 'desk' });
   state.gridScrollKeep = keep; state.gridKey = `${tab}:${event.current_block_id}`;
   if (keep) window.scrollTo(0, wy);
+  if (tab !== 'chat') app.insertAdjacentHTML('beforeend', `<a class="chatfab" href="#/e/${event.id}/chat" title="Chat da equipa">💬<span class="tbadge ${unreadFor(event.id) ? '' : 'hide'}" data-unread="${event.id}">${unreadFor(event.id)}</span></a>`);
   applyGridPrefs();
   bindEvent(tab);
   updateTimers();
+  if (tab === 'chat') afterChatRender();
   state.lastEv = state.ev;
 }
 
@@ -1440,6 +1447,18 @@ function bindEvent(tab) {
       });
     }
     if (t('[data-stage]')) return openStage();
+    if (t('[data-opencall]')) return callModal();
+    if (t('[data-togglequick]')) { const q = $('#quick'); q.classList.toggle('hide'); if (!q.classList.contains('hide')) drawQuick(); return; }
+    if ((el = t('[data-qact]'))) return drawQuick(el.dataset.qact);
+    if (t('[data-qback]')) return drawQuick();
+    if ((el = t('[data-qmic]'))) { el.classList.toggle('on'); return; }
+    if ((el = t('[data-qsend]'))) {
+      const ids = $$('.qmic.on').map((x) => Number(x.dataset.qmic));
+      if (!ids.length) return toast('Escolhe pelo menos um micro', true);
+      await act(() => api('POST', `/api/events/${state.evId}/chat`, { action: el.dataset.qsend, mic_ids: ids, text: $('#qnote')?.value || '' }));
+      $('#quick').classList.add('hide'); return scheduleReload();
+    }
+    if ((el = t('[data-qtext]'))) { await act(() => api('POST', `/api/events/${state.evId}/chat`, { text: el.dataset.qtext })); $('#quick').classList.add('hide'); return; }
     if ((el = t('[data-gz]'))) { const v = viewPrefs(); const cur = v.name || Number(getComputedStyle($('.mgrid.live') || document.body).getPropertyValue('--g-name').replace('px', '')) || 17; v.name = Math.max(10, Math.min(36, cur + Number(el.dataset.gz) * 2)); v.label = 'Personalizado'; v.presetId = null; saveView(v); return renderEvent('live'); }
     if (t('[data-gall]')) { const v = viewPrefs(); v.showAll = !v.showAll; v.label = 'Personalizado'; v.presetId = null; saveView(v); state.gridKey = null; toast(v.showAll ? 'A mostrar o evento todo — desliza para trás para ver o início' : 'A mostrar só os blocos à volta do ON AIR'); return renderEvent('live'); }
     if ((el = t('[data-gw]'))) {
@@ -1556,6 +1575,13 @@ function bindEvent(tab) {
       f.reset(); $('input', f).focus();
       state.focusAdd = f.dataset.addslot;
       return scheduleReload();
+    }
+    if (f.id === 'chatform') {
+      e.preventDefault();
+      const inp = f.text; const text = inp.value.trim(); if (!text) return;
+      inp.value = '';
+      await act(() => api('POST', `/api/events/${state.evId}/chat`, { text })).catch(() => { inp.value = text; });
+      inp.focus(); return;
     }
     if (f.id === 'addmember') {
       e.preventDefault();
@@ -1874,6 +1900,194 @@ async function renderIntegrations() {
     const d = e.target.closest('[data-delrcv]');
     if (d && await confirmBox('Apagar esta base?', 'As ligações aos micros também são removidas.')) { await api('DELETE', `/api/integrations/${d.dataset.delrcv}`); renderIntegrations(); }
   };
+}
+
+// ---------- CHAT DO EVENTO ----------
+const unread = {};
+const unreadFor = (id) => unread[id] || 0;
+async function loadUnread() { try { const u = await api('GET', '/api/me/unread'); Object.keys(unread).forEach((k) => delete unread[k]); Object.assign(unread, u); } catch { } }
+function paintUnread(evId) {
+  $$(`[data-unread="${evId}"]`).forEach((b) => { b.textContent = unreadFor(evId); b.classList.toggle('hide', !unreadFor(evId)); });
+}
+let userES = null;
+function startUserStream() {
+  stopUserStream();
+  loadUnread();
+  userES = new EventSource('/api/me/stream');
+  userES.onmessage = (m) => { let d; try { d = JSON.parse(m.data); } catch { return; } if (d.type === 'chat') onChatMessage(d); else if (d.type === 'chat_read') onChatRead(d); };
+}
+function stopUserStream() { if (userES) { userES.close(); userES = null; } }
+const viewingChat = (evId) => state.evId === evId && location.hash.endsWith('/chat') && !document.hidden;
+
+// som e vibração (o browser só deixa tocar som depois de um primeiro toque na página)
+let actx = null;
+document.addEventListener('pointerdown', () => { try { actx ||= new (window.AudioContext || window.webkitAudioContext)(); if (actx.state === 'suspended') actx.resume(); } catch { } }, { capture: true });
+function beep(kind = 'msg') {
+  try {
+    if (!actx) return;
+    const notes = kind === 'call' ? [880, 660, 880, 660] : [660, 990];
+    notes.forEach((f, i) => {
+      const o = actx.createOscillator(), g = actx.createGain(); const t = actx.currentTime + i * 0.16;
+      o.frequency.value = f; o.type = 'sine'; g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(0.25, t + 0.02); g.gain.exponentialRampToValueAtTime(0.0001, t + 0.14);
+      o.connect(g).connect(actx.destination); o.start(t); o.stop(t + 0.15);
+    });
+  } catch { }
+  try { navigator.vibrate?.(kind === 'call' ? [300, 150, 300, 150, 600] : [120, 60, 120]); } catch { }
+}
+
+function onChatMessage(d) {
+  const msg = d.message; const mine = msg.user_id === state.me?.id;
+  if (state.chat && state.chat.evId === d.event_id && !state.chat.messages.some((x) => x.id === msg.id)) state.chat.messages.push(msg);
+  if (mine) { if (viewingChat(d.event_id)) drawChat(); return; }
+  if (viewingChat(d.event_id)) { drawChat(true); markRead(d.event_id); }
+  else { unread[d.event_id] = (unread[d.event_id] || 0) + 1; paintUnread(d.event_id); }
+  const forMe = msg.kind === 'call' && (!msg.target_user_id || msg.target_user_id === state.me.id);
+  if (forMe) return callPopup(d);
+  if (!viewingChat(d.event_id)) chatToast(d);
+}
+function onChatRead(d) {
+  if (!state.chat || state.chat.evId !== d.event_id) return;
+  const r = state.chat.reads.find((x) => x.user_id === d.user_id);
+  if (r) r.last_read_id = Math.max(r.last_read_id, d.last_read_id); else state.chat.reads.push({ user_id: d.user_id, name: d.name, last_read_id: d.last_read_id });
+  if (viewingChat(d.event_id)) drawChat();
+}
+function chatToast(d) {
+  const msg = d.message;
+  beep();
+  let box = $('#notifs'); if (!box) { box = document.createElement('div'); box.id = 'notifs'; document.body.appendChild(box); }
+  const el = document.createElement('div');
+  el.className = 'notif chat ' + (msg.kind === 'system' ? 'sys' : msg.kind === 'action' ? 'act' : '');
+  el.innerHTML = `<div class="mav">${msg.kind === 'system' ? '🔀' : esc((msg.user_name || '?').trim()[0] || '?').toUpperCase()}</div>
+    <div class="grow"><b>💬 ${esc(msg.kind === 'system' ? 'Alinhamento alterado' : msg.user_name)}</b> <span>${esc(msg.text)}</span><small>${esc(d.event_name)} · toca para abrir o chat</small></div>`;
+  el.onclick = () => { el.remove(); go(`#/e/${d.event_id}/chat`); };
+  box.prepend(el); while (box.children.length > 4) box.lastElementChild.remove();
+  setTimeout(() => { el.classList.add('out'); setTimeout(() => el.remove(), 400); }, 9000);
+  try {
+    if (document.hidden && 'Notification' in window && Notification.permission === 'granted') {
+      const n = new Notification(`💬 ${msg.kind === 'system' ? 'Alinhamento' : msg.user_name} · ${d.event_name}`, { body: msg.text, icon: '/icon-192.png', tag: 'chat-' + msg.id });
+      n.onclick = () => { window.focus(); go(`#/e/${d.event_id}/chat`); n.close(); };
+    }
+  } catch { }
+}
+function callPopup(d) {
+  const msg = d.message;
+  $('.callpop')?.remove();
+  const el = document.createElement('div'); el.className = 'callpop';
+  el.innerHTML = `<div class="callbox">
+    <div class="callring">📣</div>
+    <div class="label-up" style="color:#ffb4ae">${msg.target_user_id ? 'Chamada para ti' : 'Chamada para todos'} · ${esc(d.event_name)}</div>
+    <h1>${esc(msg.user_name)} está a chamar-te</h1>
+    <p class="calltext">"${esc(msg.text)}"</p>
+    <div class="row" style="gap:10px;justify-content:center;flex-wrap:wrap">
+      <button class="btn big primary" data-callans="ok">✅ Vou já!</button>
+      <button class="btn big" data-callans="wait">⏳ 5 minutos</button>
+      <button class="btn big" data-callans="no">✋ Agora não</button>
+    </div>
+    <a href="#/e/${d.event_id}/chat" class="small" data-callans="open" style="display:inline-block;margin-top:14px">Abrir o chat</a></div>`;
+  document.body.appendChild(el);
+  let n = 0; beep('call'); const t = setInterval(() => { if (++n > 6 || !document.body.contains(el)) return clearInterval(t); beep('call'); }, 1800);
+  try {
+    if (document.hidden && 'Notification' in window && Notification.permission === 'granted') new Notification(`📣 ${msg.user_name} está a chamar-te`, { body: msg.text, icon: '/icon-192.png', requireInteraction: true, tag: 'call-' + msg.id });
+  } catch { }
+  el.onclick = async (e) => {
+    const b = e.target.closest('[data-callans]'); if (!b) return;
+    clearInterval(t); el.remove();
+    const ans = { ok: '✅ Vou já!', wait: '⏳ Daqui a 5 minutos', no: '✋ Agora não posso' }[b.dataset.callans];
+    if (ans) await api('POST', `/api/events/${d.event_id}/chat`, { text: `${ans} (resposta à chamada de ${msg.user_name}: "${msg.text}")`, kind: 'reply' }).catch(() => { });
+    // responder ou abrir = a chamada foi vista
+    api('POST', `/api/events/${d.event_id}/chat/read`, {}).then(() => { unread[d.event_id] = 0; paintUnread(d.event_id); }).catch(() => { });
+  };
+}
+async function markRead(evId) {
+  const last = state.chat?.messages?.length ? state.chat.messages[state.chat.messages.length - 1].id : 0;
+  unread[evId] = 0; paintUnread(evId);
+  try { await api('POST', `/api/events/${evId}/chat/read`, { last_id: last }); } catch { }
+}
+
+const QUICK_TEXTS = ['👍 OK, recebido', '✅ Pronto para o próximo bloco', '🎙 Orador micado', '🤝 Micro entregue ao orador', '🆘 Preciso de ajuda no palco', '🎛 Vou à régie', '⏱ Atraso de 5 minutos', '🔇 Micro sem sinal'];
+function viewChat() {
+  return `<div class="chatwrap card">
+    <div class="chathead"><div><b>💬 Chat da equipa</b><div class="small muted" id="chatppl">a carregar…</div></div>
+      <button class="btn sm callbtn" data-opencall>📣 Chamar alguém</button></div>
+    <div class="chatlist" id="chatlist"><div class="empty">A carregar…</div></div>
+    <div class="quick hide" id="quick"></div>
+    <form class="chatform" id="chatform" autocomplete="off">
+      <button type="button" class="btn icon" data-togglequick title="Mensagens rápidas">⚡</button>
+      <input name="text" placeholder="Escreve uma mensagem para a equipa…" class="grow" maxlength="2000">
+      <button class="btn primary">Enviar</button>
+    </form></div>`;
+}
+async function afterChatRender() {
+  const evId = state.evId;
+  try {
+    const d = await api('GET', `/api/events/${evId}/chat`);
+    state.chat = { evId, ...d };
+  } catch (e) { $('#chatlist').innerHTML = `<div class="empty">${esc(e.message)}</div>`; return; }
+  drawChat(true); markRead(evId);
+  $('#chatppl').textContent = `${state.chat.participants.length} pessoas: ${state.chat.participants.map((p) => p.name || p.email).join(', ')}`;
+  $('#chatform input')?.focus({ preventScroll: true });
+}
+function seenBy(msg) {
+  if (!state.chat) return [];
+  return state.chat.participants.filter((p) => p.id !== msg.user_id && (state.chat.reads.find((r) => r.user_id === p.id)?.last_read_id || 0) >= msg.id);
+}
+function drawChat(scroll) {
+  const box = $('#chatlist'); if (!box || !state.chat) return;
+  const atBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 80;
+  const others = state.chat.participants.filter((p) => p.id !== state.me.id).length;
+  let lastDay = '';
+  box.innerHTML = state.chat.messages.length ? state.chat.messages.map((m) => {
+    const d = new Date(m.created_at.replace(' ', 'T') + 'Z');
+    const day = d.toLocaleDateString('pt-PT', { weekday: 'long', day: 'numeric', month: 'long' });
+    const dh = day !== lastDay ? `<div class="chatday">${esc(day)}</div>` : ''; lastDay = day;
+    const time = d.toLocaleTimeString('pt-PT', { hour: '2-digit', minute: '2-digit' });
+    if (m.kind === 'system') return `${dh}<div class="msys">${esc(m.text)} <span>${time}</span></div>`;
+    const mine = m.user_id === state.me.id;
+    const seen = seenBy(m);
+    const status = mine ? (seen.length && seen.length >= others ? '<span class="seen all">✓✓ Visto por todos</span>'
+      : seen.length ? `<span class="seen">✓✓ Visto por ${esc(seen.map((p) => (p.name || p.email).split(' ')[0]).join(', '))}</span>` : '<span class="seen no">✓ Enviado · ainda não visto</span>')
+      : (seen.length ? `<span class="seen">👁 ${seen.length}</span>` : '');
+    const chips = m.meta?.mics ? `<div class="mchips">${m.meta.mics.map((x) => `<span class="chip" style="background:${esc(x.color)};color:${contrastText(x.color)}">${esc(x.label)}</span>`).join('')}</div>` : '';
+    const call = m.kind === 'call' ? `<div class="mcall">📣 Chamada para <b>${esc(m.meta?.target_name || 'Todos')}</b></div>` : '';
+    return `${dh}<div class="msg ${mine ? 'mine' : ''} k-${m.kind}">
+      ${mine ? '' : `<div class="mav">${esc((m.user_name || '?').trim()[0] || '?').toUpperCase()}</div>`}
+      <div class="bubble">${mine ? '' : `<div class="mname">${esc(m.user_name)}</div>`}${call}<div class="mtext">${esc(m.text)}</div>${chips}
+        <div class="mmeta">${time} ${status}</div></div></div>`;
+  }).join('') : '<div class="empty">Ainda não há mensagens. Diz olá à equipa 👋<br><span class="small">Todas as pessoas deste evento recebem as mensagens.</span></div>';
+  if (scroll || atBottom) box.scrollTop = box.scrollHeight;
+}
+function drawQuick(action = null) {
+  const q = $('#quick'); const acts = state.chat?.actions || {};
+  const mics = state.ev.mics;
+  q.innerHTML = action ? `
+    <div class="row" style="justify-content:space-between"><b>${acts[action].emoji} ${esc(acts[action].label)}</b><button type="button" class="btn sm ghost" data-qback>← voltar</button></div>
+    <div class="small muted" style="margin:4px 0 8px">Escolhe um ou vários micros — o estado deles muda automaticamente quando enviares.</div>
+    <div class="qmics">${mics.map((m) => `<button type="button" class="qmic" data-qmic="${m.id}"><span class="chip" style="background:${esc(m.color)};color:${contrastText(m.color)}">${esc(m.label)}</span>${batt(m.battery)}<small>${esc(m.person || TYPES[m.type])}</small></button>`).join('')}</div>
+    <div class="row" style="margin-top:10px"><input id="qnote" placeholder="Nota (opcional)" class="grow"><button type="button" class="btn primary" data-qsend="${action}">Enviar</button></div>`
+    : `<div class="label-up">Com micros (muda o estado automaticamente)</div>
+    <div class="qrow">${Object.entries(acts).map(([k, a]) => `<button type="button" class="btn sm" data-qact="${k}">${a.emoji} ${esc(a.label)}…</button>`).join('')}</div>
+    <div class="label-up" style="margin-top:10px">Mensagens rápidas</div>
+    <div class="qrow">${QUICK_TEXTS.map((t) => `<button type="button" class="btn sm ghost qt" data-qtext="${esc(t)}">${esc(t)}</button>`).join('')}</div>`;
+}
+function callModal() {
+  const ppl = (state.chat?.participants || []).filter((p) => p.id !== state.me.id);
+  const f = modal('📣 Chamar alguém', `
+    <p class="small muted" style="margin-top:0">A pessoa recebe um alerta no ecrã com som e vibração, e a mensagem fica no chat para todos verem.</p>
+    <div class="label-up">Quem?</div>
+    <div class="callppl">${ppl.map((p) => `<label class="cpp"><input type="radio" name="target" value="${p.id}"><span class="mav">${esc((p.name || p.email).trim()[0].toUpperCase())}</span>${esc(p.name || p.email)}</label>`).join('')}
+      <label class="cpp"><input type="radio" name="target" value="" ${ppl.length ? '' : 'checked'}><span class="mav">👥</span>Todos</label></div>
+    <div class="label-up" style="margin-top:12px">Mensagem</div>
+    <div class="qrow" style="margin-bottom:8px">${['Vem ao palco', 'Vem à régie', 'Preciso de ti já', 'Liga-me', 'Traz pilhas'].map((t) => `<button type="button" class="btn sm ghost" data-cpreset="${t}">${t}</button>`).join('')}</div>
+    <input name="text" placeholder="Ex: Vem ao palco, a lapela 3 não tem sinal" value="Vem ao palco">`, {
+    submitLabel: '📣 Chamar',
+    onSubmit: async (d) => {
+      if (d.target === undefined && ppl.length) throw new Error('Escolhe quem queres chamar');
+      await api('POST', `/api/events/${state.evId}/chat`, { call: true, target_user_id: d.target || null, text: d.text });
+      toast('Chamada enviada');
+    },
+  });
+  $('[name=target]', f)?.setAttribute('checked', 'checked');
+  f.addEventListener('click', (e) => { const p = e.target.closest('[data-cpreset]'); if (p) $('[name=text]', f).value = p.dataset.cpreset; });
 }
 
 // ---------- cronómetro do bloco ON AIR ----------

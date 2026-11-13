@@ -73,6 +73,12 @@ App web (iPad, telemóvel e PC) para gerir microfones, pilhas e o alinhamento de
   - Só o dono pode apagar o evento e gerir a equipa.
   - Se o colega ainda não tem conta, fica com um convite pendente. Quando criar conta com esse email, o evento aparece-lhe automaticamente.
   - O botão "Copiar mensagem de convite" prepara o texto para mandar por WhatsApp ou email.
+- **💬 Chat do evento**: um chat para toda a equipa do evento (o dono e os colegas adicionados).
+  - Cada mensagem mostra o nome de quem a enviou, a hora e se já foi vista ("✓ Enviado", "✓✓ Visto por Ana, Rui", "✓✓ Visto por todos").
+  - **Notificações**: quem não está no chat recebe um aviso no ecrã com som e vibração, um contador vermelho no botão 💬 e no separador Chat, e "💬 3 novas" na lista de eventos. Com as notificações do sistema ativas, o aviso chega também com a app em segundo plano.
+  - **⚡ Mensagens rápidas com micros**: "🔋 Troquei as pilhas", "🪫 Pilhas fracas", "🛠 Micro com problema" e "✅ Micro operacional". Escolhes um ou vários micros e o estado deles muda automaticamente (bateria cheia, fraca, avaria ou operacional). Há também textos prontos ("Orador micado", "Pronto para o próximo bloco", "Preciso de ajuda no palco", …).
+  - **Avisos automáticos do alinhamento**: quando alguém troca a ordem de blocos, muda a hora de um bloco, passa um orador para outro bloco ou apaga um bloco, todos recebem uma mensagem no chat.
+  - **📣 Chamar alguém**: escolhes a pessoa (ou Todos) e a mensagem ("Vem ao palco", …). A pessoa recebe um alerta em ecrã inteiro, com som, vibração e os botões "Vou já!", "5 minutos" e "Agora não". A resposta vai para o chat.
 - **Histórico e notificações**: todas as alterações ficam registadas com o nome de quem as fez, a hora e o que mudou. Por exemplo: *"Ana mudou as pilhas do micro 3: cheia → 1 traço"*, *"Rui pôs ON AIR o bloco 15:55"*, *"Pedro mudou o micro de Ana Branquinho (14:00): Head → 4"*.
   - O separador **Histórico** de cada evento mostra tudo, agrupado por dia. Dá para filtrar por pessoa e pesquisar.
   - Quando um colega altera alguma coisa, aparece uma notificação no canto do ecrã.
