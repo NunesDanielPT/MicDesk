@@ -29,7 +29,7 @@ const AIR_MODES_LONG = {
   auto: 'Automático — passa sozinho para o bloco seguinte à hora marcada',
   manual: 'Manual — só muda quando alguém carrega em "Pôr no ar"',
 };
-const ROLES = { superadmin: 'Super admin', admin: 'Administrador', operator: 'Operador', viewer: 'Só leitura' };
+const ROLES = { superadmin: 'Super admin', user: 'Utilizador' };
 
 function contrastText(hex) {
   const n = parseInt((hex || '#000000').slice(1), 16);
@@ -94,7 +94,7 @@ function modal(title, bodyHtml, { onSubmit, submitLabel = 'Guardar', danger, ext
   bg.innerHTML = `<form class="modal" ${wide ? 'style="max-width:720px"' : ''} autocomplete="off">
     <div class="mh"><h2 style="margin:0">${esc(title)}</h2><button type="button" class="btn ghost icon" data-close aria-label="Fechar">✕</button></div>
     <div class="mb">${bodyHtml}</div>
-    <div class="mf">${extraFooter}<span class="grow"></span><button type="button" class="btn" data-close>Cancelar</button>
+    <div class="mf">${extraFooter}<span class="grow"></span><button type="button" class="btn" data-close>${onSubmit ? 'Cancelar' : 'Fechar'}</button>
     ${onSubmit ? `<button class="btn ${danger ? 'danger solid' : 'primary'}" type="submit">${esc(submitLabel)}</button>` : ''}</div>
   </form>`;
   document.body.appendChild(bg);
@@ -167,7 +167,7 @@ async function render() {
     return renderEvent(tab);
   }
   stopStream(); state.ev = null; state.evId = null;
-  if (parts[0] === 'admin') return renderAdmin(parts[1] || (state.me.role === 'superadmin' ? 'orgs' : 'users'));
+  if (parts[0] === 'admin') return renderAdmin();
   if (parts[0] === 'account') return renderAccount();
   return renderHome();
 }
@@ -203,8 +203,8 @@ function stopStream() { if (state.es) { state.es.close(); state.es = null; state
 document.addEventListener('visibilitychange', () => { if (!document.hidden && state.evId) scheduleReload(); });
 
 // ---------- shell ----------
-const canWrite = () => state.me && state.me.role !== 'viewer';
-const isAdmin = () => state.me && (state.me.role === 'admin' || state.me.role === 'superadmin');
+const canWrite = () => !!state.me;
+const isSuper = () => state.me && state.me.role === 'superadmin';
 
 function shell(content, { crumb = '', tabs = '' } = {}) {
   const u = state.me;
@@ -217,11 +217,10 @@ function shell(content, { crumb = '', tabs = '' } = {}) {
       <div class="menu">
         <button class="btn sm" data-menu>${esc((u.name || u.email).split(' ')[0])} ▾</button>
         <div class="dropdown hide" id="dd">
-          <div class="small muted" style="padding:8px 12px">${esc(u.email)}<br>${ROLES[u.role]}${u.org_name ? ' · ' + esc(u.org_name) : ''}</div>
+          <div class="small muted" style="padding:8px 12px">${esc(u.email)}<br>${ROLES[u.role]}</div>
           <hr>
           <a href="#/">Eventos</a>
-          ${u.role === 'superadmin' ? '<a href="#/admin/orgs">Clientes</a>' : ''}
-          ${u.role === 'superadmin' ? '<a href="#/admin/users">Utilizadores</a>' : ''}
+          ${u.role === 'superadmin' ? '<a href="#/admin">Utilizadores</a>' : ''}
           <a href="#/account">A minha conta</a>
           <hr>
           <button data-logout>Sair</button>
@@ -263,16 +262,20 @@ function renderLogin() {
 // ---------- home (eventos) ----------
 async function renderHome() {
   app.innerHTML = shell('<div class="empty">A carregar…</div>');
-  const [events, orgs, lim] = await Promise.all([
-    api('GET', '/api/events' + (state.showArchived ? '?archived=1' : '')),
-    state.me.role === 'superadmin' ? api('GET', '/api/orgs') : Promise.resolve([]),
+  const sa = isSuper();
+  const qs = new URLSearchParams();
+  if (state.showArchived) qs.set('archived', '1');
+  if (sa && state.ownerFilter) qs.set('user', state.ownerFilter);
+  const [events, users, lim] = await Promise.all([
+    api('GET', '/api/events?' + qs),
+    sa ? api('GET', '/api/users') : Promise.resolve([]),
     api('GET', '/api/limits'),
   ]);
   const today = todayISO();
   const item = (e) => `<a class="card evcard" href="#/e/${e.id}">
       <div class="row" style="justify-content:space-between;align-items:flex-start">
         <div style="min-width:0"><h3>${esc(e.name)}</h3>
-          <div class="muted small">${esc(fmtDate(e.date))}${e.venue ? ' · ' + esc(e.venue) : ''}${state.me.role === 'superadmin' ? ' · <span style="color:var(--info)">' + esc(e.org_name) + '</span>' : ''}</div></div>
+          <div class="muted small">${[e.date && esc(fmtDate(e.date)), e.venue && esc(e.venue), sa && '<span style="color:var(--info)">' + esc(e.owner_name || e.owner_email) + '</span>'].filter(Boolean).join(' · ')}</div></div>
         ${e.date === today ? '<span class="pill ok">Hoje</span>' : ''}
       </div>
       <div class="pills"><span class="pill">${e.mic_count} micros</span><span class="pill">${e.block_count} blocos</span>
@@ -280,9 +283,10 @@ async function renderHome() {
     </a>`;
   const content = `
     <div class="row" style="justify-content:space-between;flex-wrap:wrap">
-      <div><h1>Eventos</h1><div class="muted small">${state.me.org_name ? esc(state.me.org_name) : 'Todos os clientes'}
+      <div><h1>Eventos</h1><div class="muted small">${sa ? (state.ownerFilter ? 'Eventos de ' + esc(users.find((x) => x.id === state.ownerFilter)?.name || '') : 'Eventos de todos os utilizadores') : 'Os meus eventos'}
         ${lim.max ? ` · <span class="pill ${lim.used >= lim.max ? 'danger' : lim.used >= lim.max - 1 ? 'warn' : ''}">${lim.used} / ${lim.max} eventos</span>` : ''}</div></div>
-      <div class="row">
+      <div class="row" style="flex-wrap:wrap">
+        ${sa ? `<select id="ownerf" style="width:auto;min-height:40px"><option value="">Todos</option>${users.map((x) => `<option value="${x.id}" ${state.ownerFilter === x.id ? 'selected' : ''}>${esc(x.name || x.email)}</option>`).join('')}</select>` : ''}
         <div class="seg"><button data-arch="0" class="${!state.showArchived ? 'on' : ''}">Ativos</button><button data-arch="1" class="${state.showArchived ? 'on' : ''}">Arquivo</button></div>
         ${canWrite() ? '<button class="btn primary" id="newev">+ Novo evento</button>' : ''}
       </div>
@@ -290,12 +294,13 @@ async function renderHome() {
     <div class="list" style="margin-top:16px">${events.length ? events.map(item).join('') : `<div class="card empty">${state.showArchived ? 'Sem eventos arquivados.' : 'Ainda não há eventos. Cria o primeiro.'}</div>`}</div>`;
   app.innerHTML = shell(content);
   $$('[data-arch]').forEach((b) => b.onclick = () => { state.showArchived = b.dataset.arch === '1'; renderHome(); });
-  $('#newev')?.addEventListener('click', () => (lim.max && lim.used >= lim.max ? limitModal(lim.max) : newEventModal(orgs)));
+  $('#ownerf')?.addEventListener('change', (e) => { state.ownerFilter = Number(e.target.value) || null; renderHome(); });
+  $('#newev')?.addEventListener('click', () => (lim.max && lim.used >= lim.max ? limitModal(lim.max) : newEventModal()));
 }
 
 // limite de eventos atingido: mostra os eventos (passados primeiro) para apagar
 async function limitModal(max) {
-  const evs = [...(await api('GET', '/api/events')), ...(await api('GET', '/api/events?archived=1'))];
+  const evs = await api('GET', '/api/events?all=1');
   const today = todayISO();
   const isPast = (e) => (e.date && e.date < today) || e.archived;
   evs.sort((a, b) => (isPast(b) - isPast(a)) || String(a.date).localeCompare(String(b.date)));
@@ -316,11 +321,8 @@ async function limitModal(max) {
     closeModal(); renderHome().then(() => $('#newev')?.click());
   });
 }
-function newEventModal(orgs) {
-  const sa = state.me.role === 'superadmin';
-  if (sa && !orgs.length) { toast('Cria primeiro um cliente em Clientes', true); return go('#/admin/orgs'); }
+function newEventModal() {
   modal('Novo evento', `
-    ${sa ? `<div class="field"><label>Cliente</label><select name="org_id" required>${orgs.map((o) => `<option value="${o.id}">${esc(o.name)}</option>`).join('')}</select></div>` : ''}
     <div class="field"><label>Nome do evento</label><input name="name" required placeholder="Ex: CCB 13.11.2026"></div>
     <details class="more"><summary>Mais opções (opcional)</summary>
     <div class="grid2" style="margin-top:12px"><div class="field"><label>Data</label><input name="date" type="date"></div>
@@ -383,7 +385,7 @@ function micSelect(slot, mics, micById) {
 
 // ---------- event page ----------
 function renderEvent(tab) {
-  const { event, org } = state.ev;
+  const { event, owner } = state.ev;
   const tabs = `<nav class="tabs">
     ${[['rundown', 'Alinhamento'], ['mics', 'Micros'], ['live', 'Ao vivo'], ['settings', 'Evento']].map(([k, l]) => `<a class="tab ${tab === k ? 'on' : ''}" href="#/e/${event.id}/${k}">${l}</a>`).join('')}
   </nav>`;
@@ -394,7 +396,7 @@ function renderEvent(tab) {
   else if (tab === 'settings') content = viewSettings();
   else content = viewRundown();
   const head = tab === 'live' ? '' : `<div class="row" style="justify-content:space-between;flex-wrap:wrap;gap:6px">
-      <div style="min-width:0"><h1>${esc(event.name)}</h1><div class="muted small">${esc(fmtDate(event.date))}${event.venue ? ' · ' + esc(event.venue) : ''}${state.me.role === 'superadmin' ? ' · ' + esc(org?.name || '') : ''}</div></div></div>`;
+      <div style="min-width:0"><h1>${esc(event.name)}</h1><div class="muted small">${esc(fmtDate(event.date))}${event.venue ? ' · ' + esc(event.venue) : ''}${isSuper() && owner ? ' · <span style="color:var(--info)">' + esc(owner.name || owner.email) + '</span>' : ''}</div></div></div>`;
   app.innerHTML = shell(head + content, { crumb, tabs });
   bindEvent(tab);
 }
@@ -722,7 +724,7 @@ function viewSettings() {
           <button class="btn" data-archive>${event.archived ? 'Desarquivar' : 'Arquivar'} evento</button>
           <button class="btn danger" data-delev>Apagar evento</button>
         </div></div>` : ''}
-      <div class="card small muted">Partilha este evento com a tua equipa: quem tiver conta no mesmo cliente vê tudo em tempo real — iPad do palco, telemóvel do técnico e PC da régie.
+      <div class="card small muted">Abre este evento com a tua conta em vários aparelhos ao mesmo tempo (iPad do palco, telemóvel, PC da régie) — tudo sincroniza em tempo real.
         <div style="margin-top:8px">Última alteração: ${ago(event.updated_at)}</div></div>
     </div>
   </div>`;
@@ -868,123 +870,64 @@ async function checkAir() {
 }
 setInterval(() => { checkAir().catch(() => { }); }, 10000);
 
-// ---------- admin ----------
-async function renderAdmin(sub) {
-  if (state.me.role !== 'superadmin') return go('#/');
-  if (sub === 'orgs' && state.me.role !== 'superadmin') return go('#/admin/users');
-  const tabs = `<nav class="tabs">
-    ${state.me.role === 'superadmin' ? `<a class="tab ${sub === 'orgs' ? 'on' : ''}" href="#/admin/orgs">Clientes</a>` : ''}
-    <a class="tab ${sub === 'users' ? 'on' : ''}" href="#/admin/users">Utilizadores</a></nav>`;
-  app.innerHTML = shell('<div class="empty">A carregar…</div>', { crumb: 'Administração', tabs });
-  if (sub === 'orgs') return adminOrgs(tabs);
-  return adminUsers(tabs);
-}
-
-async function adminOrgs(tabs) {
-  const [orgs, stats] = await Promise.all([api('GET', '/api/orgs'), api('GET', '/api/admin/stats')]);
+// ---------- admin (só super admin) ----------
+async function renderAdmin() {
+  if (!isSuper()) return go('#/');
+  app.innerHTML = shell('<div class="empty">A carregar…</div>', { crumb: 'Utilizadores' });
+  const [users, stats] = await Promise.all([api('GET', '/api/users'), api('GET', '/api/admin/stats')]);
+  const roleOpts = (sel) => Object.entries(ROLES).map(([k, v]) => `<option value="${k}" ${k === sel ? 'selected' : ''}>${v}</option>`).join('');
   app.innerHTML = shell(`
     <div class="stats" style="margin-top:14px">
-      <div class="card stat"><b>${stats.orgs}</b><span>clientes</span></div>
       <div class="card stat"><b>${stats.users}</b><span>utilizadores</span></div>
       <div class="card stat"><b>${stats.events}</b><span>eventos</span></div>
       <div class="card stat"><b>${stats.mics}</b><span>micros</span></div>
       <div class="card stat"><b style="color:var(--accent)">${stats.live_connections}</b><span>ecrãs ligados agora</span></div>
     </div>
-    <div class="toolbar"><h2 style="margin:0" class="grow">Clientes</h2><button class="btn primary" id="neworg">+ Novo cliente</button></div>
+    <div class="toolbar"><h2 style="margin:0" class="grow">Utilizadores</h2><button class="btn primary" id="newuser">+ Utilizador</button></div>
+    <div class="card small muted" style="margin-bottom:12px">Cada utilizador só vê e gere os seus próprios eventos. Tu, como super admin, vês os eventos de todos.</div>
     <div class="card tablewrap" style="padding:0"><table class="table">
-      <tr><th>Cliente</th><th class="hide-sm">Contacto</th><th>Utiliz.</th><th>Eventos</th><th>Estado</th><th></th></tr>
-      ${orgs.map((o) => `<tr>
-        <td><b>${esc(o.name)}</b></td><td class="hide-sm muted">${esc(o.contact)}</td><td>${o.users}</td>
-        <td>${o.events}${o.max_events ? ` / ${o.max_events}` : ''}</td>
-        <td>${o.active ? '<span class="pill ok">Ativo</span>' : '<span class="pill danger">Suspenso</span>'}</td>
-        <td style="text-align:right;white-space:nowrap"><a class="btn sm" href="#/admin/users" data-orgusers="${o.id}">Utilizadores</a> <button class="btn sm" data-editorg="${o.id}">Editar</button></td>
-      </tr>`).join('') || '<tr><td colspan="6" class="muted">Sem clientes.</td></tr>'}
-    </table></div>`, { crumb: 'Administração', tabs });
-
-  $('#neworg').onclick = () => modal('Novo cliente', `
-    <div class="field"><label>Nome do cliente / empresa</label><input name="name" required></div>
-    <div class="grid2"><div class="field"><label>Contacto</label><input name="contact" placeholder="Telefone ou email"></div>
-    <div class="field"><label>Limite de eventos (0 = sem limite)</label><input name="max_events" type="number" min="0" value="5"></div></div>
-    <h3 style="margin:8px 0 10px">Administrador do cliente</h3>
-    <div class="grid2"><div class="field"><label>Nome</label><input name="admin_name"></div>
-    <div class="field"><label>Email</label><input name="admin_email" type="email"></div></div>
-    <div class="field"><label>Password (vazio = gerar automaticamente)</label><input name="admin_password" type="text"></div>`, {
-    submitLabel: 'Criar cliente',
-    onSubmit: async (d) => {
-      const r = await api('POST', '/api/orgs', d);
-      if (r.admin_password) showPassword(d.admin_email, r.admin_password);
-      adminOrgs(tabs); return !!r.admin_password;
-    },
-  });
-  app.onclick = (e) => {
-    const ou = e.target.closest('[data-orgusers]'); if (ou) { state.userOrgFilter = Number(ou.dataset.orgusers); return; }
-    const b = e.target.closest('[data-editorg]'); if (!b) return;
-    const o = orgs.find((x) => x.id === Number(b.dataset.editorg));
-    const f = modal('Editar cliente', `
-      <div class="field"><label>Nome</label><input name="name" value="${esc(o.name)}" required></div>
-      <div class="grid2"><div class="field"><label>Contacto</label><input name="contact" value="${esc(o.contact)}"></div>
-      <div class="field"><label>Limite de eventos (0 = sem limite)</label><input name="max_events" type="number" min="0" value="${o.max_events}"></div></div>
-      <label class="row" style="color:var(--text)"><input type="checkbox" name="active" ${o.active ? 'checked' : ''} style="width:auto;min-height:0"> Cliente ativo (desativar bloqueia o acesso de todos os utilizadores dele)</label>`, {
-      extraFooter: '<button type="button" class="btn danger" id="delorg">Apagar</button>',
-      onSubmit: async (d) => { await api('PUT', `/api/orgs/${o.id}`, d); toast('Guardado'); adminOrgs(tabs); },
-    });
-    $('#delorg', f).onclick = async () => {
-      closeModal();
-      if (await confirmBox(`Apagar ${o.name}?`, `Apaga o cliente, os ${o.users} utilizadores e os ${o.events} eventos. Não dá para desfazer.`)) { await act(() => api('DELETE', `/api/orgs/${o.id}`), 'Cliente apagado'); adminOrgs(tabs); }
-    };
-  };
-}
-
-function showPassword(email, pw) {
-  modal('Credenciais criadas', `<p>Envia estes dados à pessoa (só são mostrados agora):</p>
-    <div class="card" style="font-family:ui-monospace,Menlo,monospace;user-select:all">URL: ${esc(location.origin)}<br>Email: ${esc(email)}<br>Password: ${esc(pw)}</div>`);
-}
-
-async function adminUsers(tabs) {
-  const sa = state.me.role === 'superadmin';
-  const [users, orgs] = await Promise.all([api('GET', '/api/users' + (sa && state.userOrgFilter ? `?org=${state.userOrgFilter}` : '')), sa ? api('GET', '/api/orgs') : Promise.resolve([])]);
-  const roleOpts = (sel) => Object.entries(ROLES).filter(([k]) => sa || k !== 'superadmin').map(([k, v]) => `<option value="${k}" ${k === sel ? 'selected' : ''}>${v}</option>`).join('');
-  app.innerHTML = shell(`
-    <div class="toolbar"><h2 style="margin:0" class="grow">Utilizadores</h2>
-      ${sa ? `<select id="orgf" style="width:auto"><option value="">Todos os clientes</option>${orgs.map((o) => `<option value="${o.id}" ${state.userOrgFilter === o.id ? 'selected' : ''}>${esc(o.name)}</option>`).join('')}</select>` : ''}
-      <button class="btn primary" id="newuser">+ Utilizador</button></div>
-    <div class="card small muted" style="margin-bottom:12px">Só tu (super admin) crias utilizadores. <b>Administrador</b> e <b>Operador</b>: criam, editam e apagam eventos, micros, pilhas e alinhamento do seu cliente · <b>Só leitura</b>: vê tudo em tempo real (ex: palco, produção).</div>
-    <div class="card tablewrap" style="padding:0"><table class="table">
-      <tr><th>Nome</th><th class="hide-sm">Email</th>${sa ? '<th class="hide-sm">Cliente</th>' : ''}<th>Papel</th><th></th></tr>
+      <tr><th>Nome</th><th class="hide-sm">Email</th><th>Eventos</th><th></th></tr>
       ${users.map((u) => `<tr style="${u.active ? '' : 'opacity:.5'}">
-        <td><b>${esc(u.name || '—')}</b><div class="small muted" style="display:none" data-sm>${esc(u.email)}</div></td>
-        <td class="hide-sm muted">${esc(u.email)}</td>${sa ? `<td class="hide-sm">${esc(u.org_name || '—')}</td>` : ''}
-        <td>${ROLES[u.role]}${u.active ? '' : ' <span class="pill danger">inativo</span>'}</td>
-        <td style="text-align:right"><button class="btn sm" data-edituser="${u.id}">Editar</button></td></tr>`).join('') || '<tr><td colspan="5" class="muted">Sem utilizadores.</td></tr>'}
-    </table></div>`, { crumb: 'Administração', tabs });
-  $('#orgf')?.addEventListener('change', (e) => { state.userOrgFilter = Number(e.target.value) || null; adminUsers(tabs); });
+        <td><b>${esc(u.name || '—')}</b>${u.role === 'superadmin' ? ' <span class="pill info">super admin</span>' : ''}${u.active ? '' : ' <span class="pill danger">inativo</span>'}</td>
+        <td class="hide-sm muted">${esc(u.email)}</td>
+        <td><a href="#/" data-seeev="${u.id}">${u.events}${u.role !== 'superadmin' && u.max_events ? ` / ${u.max_events}` : ''}</a></td>
+        <td style="text-align:right"><button class="btn sm" data-edituser="${u.id}">Editar</button></td></tr>`).join('')}
+    </table></div>`, { crumb: 'Utilizadores' });
+
   $('#newuser').onclick = () => modal('Novo utilizador', `
-    ${sa ? `<div class="field"><label>Cliente</label><select name="org_id">${orgs.map((o) => `<option value="${o.id}" ${state.userOrgFilter === o.id ? 'selected' : ''}>${esc(o.name)}</option>`).join('')}</select></div>` : ''}
     <div class="grid2"><div class="field"><label>Nome</label><input name="name" required></div>
-    <div class="field"><label>Email</label><input name="email" type="email" required></div></div>
-    <div class="grid2"><div class="field"><label>Papel</label><select name="role">${roleOpts('operator')}</select></div>
-    <div class="field"><label>Password (vazio = gerar)</label><input name="password" type="text"></div></div>`, {
+    <div class="field"><label>Email (é o login)</label><input name="email" type="email" required></div></div>
+    <div class="grid2"><div class="field"><label>Password (vazio = gerar)</label><input name="password" type="text"></div>
+    <div class="field"><label>Limite de eventos (0 = sem limite)</label><input name="max_events" type="number" min="0" value="5"></div></div>
+    <div class="field"><label>Papel</label><select name="role">${roleOpts('user')}</select></div>`, {
     submitLabel: 'Criar',
-    onSubmit: async (d) => { const r = await api('POST', '/api/users', d); showPassword(d.email, r.password); adminUsers(tabs); return true; },
+    onSubmit: async (d) => { const r = await api('POST', '/api/users', d); renderAdmin().then(() => showPassword(d.email, r.password)); },
   });
   app.onclick = (e) => {
+    const se = e.target.closest('[data-seeev]'); if (se) { state.ownerFilter = Number(se.dataset.seeev); state.showArchived = false; return; }
     const b = e.target.closest('[data-edituser]'); if (!b) return;
     const u = users.find((x) => x.id === Number(b.dataset.edituser));
     const self = u.id === state.me.id;
     const f = modal('Editar utilizador', `
       <div class="small muted" style="margin-bottom:12px">${esc(u.email)}</div>
-      <div class="field"><label>Nome</label><input name="name" value="${esc(u.name)}"></div>
-      <div class="field"><label>Papel</label><select name="role" ${self ? 'disabled' : ''}>${roleOpts(u.role)}</select></div>
+      <div class="grid2"><div class="field"><label>Nome</label><input name="name" value="${esc(u.name)}"></div>
+      <div class="field"><label>Limite de eventos (0 = sem limite)</label><input name="max_events" type="number" min="0" value="${u.max_events}"></div></div>
+      ${self ? '' : `<div class="field"><label>Papel</label><select name="role">${roleOpts(u.role)}</select></div>`}
       <div class="field"><label>Nova password (vazio = manter)</label><input name="password" type="text"></div>
       ${self ? '' : `<label class="row" style="color:var(--text)"><input type="checkbox" name="active" ${u.active ? 'checked' : ''} style="width:auto;min-height:0"> Conta ativa</label>`}`, {
       extraFooter: self ? '' : '<button type="button" class="btn danger" id="deluser">Apagar</button>',
-      onSubmit: async (d) => { if (self) delete d.role; if (!d.password) delete d.password; await api('PUT', `/api/users/${u.id}`, d); toast('Guardado'); adminUsers(tabs); },
+      onSubmit: async (d) => { if (!d.password) delete d.password; await api('PUT', `/api/users/${u.id}`, d); toast('Guardado'); renderAdmin(); },
     });
     $('#deluser', f)?.addEventListener('click', async () => {
       closeModal();
-      if (await confirmBox('Apagar utilizador?', u.email)) { await act(() => api('DELETE', `/api/users/${u.id}`), 'Apagado'); adminUsers(tabs); }
+      if (await confirmBox('Apagar utilizador?', `${u.email} e os seus ${u.events} eventos vão ser apagados.`)) { await act(() => api('DELETE', `/api/users/${u.id}`), 'Apagado'); renderAdmin(); }
     });
   };
+}
+
+function showPassword(email, pw) {
+  modal('Credenciais criadas', `<p>Envia estes dados ao teu colega (a password só é mostrada agora):</p>
+    <div class="card" style="font-family:ui-monospace,Menlo,monospace;user-select:all">Endereço: ${esc(location.origin)}<br>Email: ${esc(email)}<br>Password: ${esc(pw)}</div>`);
 }
 
 function renderAccount() {

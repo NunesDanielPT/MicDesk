@@ -20,22 +20,14 @@ db.exec('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON; PRAGMA busy_timeou
 
 // ---------- schema ----------
 db.exec(`
-CREATE TABLE IF NOT EXISTS orgs (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  name TEXT NOT NULL,
-  contact TEXT DEFAULT '',
-  active INTEGER NOT NULL DEFAULT 1,
-  max_events INTEGER DEFAULT 0,
-  created_at TEXT NOT NULL DEFAULT (datetime('now'))
-);
 CREATE TABLE IF NOT EXISTS users (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
-  org_id INTEGER REFERENCES orgs(id) ON DELETE CASCADE,
   email TEXT NOT NULL UNIQUE COLLATE NOCASE,
   name TEXT NOT NULL DEFAULT '',
-  role TEXT NOT NULL CHECK (role IN ('superadmin','admin','operator','viewer')),
+  role TEXT NOT NULL DEFAULT 'user' CHECK (role IN ('superadmin','user')),
   pass TEXT NOT NULL,
   active INTEGER NOT NULL DEFAULT 1,
+  max_events INTEGER NOT NULL DEFAULT 5,
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE TABLE IF NOT EXISTS sessions (
@@ -45,13 +37,15 @@ CREATE TABLE IF NOT EXISTS sessions (
 );
 CREATE TABLE IF NOT EXISTS events (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
-  org_id INTEGER NOT NULL REFERENCES orgs(id) ON DELETE CASCADE,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   name TEXT NOT NULL,
   date TEXT DEFAULT '',
   venue TEXT DEFAULT '',
   notes TEXT DEFAULT '',
   current_block_id INTEGER,
   archived INTEGER NOT NULL DEFAULT 0,
+  air_mode TEXT NOT NULL DEFAULT 'ask',
+  on_air_at TEXT,
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
   updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
@@ -96,19 +90,61 @@ CREATE TABLE IF NOT EXISTS battery_log (
   user_name TEXT DEFAULT '',
   at TEXT NOT NULL DEFAULT (datetime('now'))
 );
-CREATE INDEX IF NOT EXISTS ix_events_org ON events(org_id);
 CREATE INDEX IF NOT EXISTS ix_mics_event ON mics(event_id);
 CREATE INDEX IF NOT EXISTS ix_blocks_event ON blocks(event_id);
 CREATE INDEX IF NOT EXISTS ix_slots_block ON slots(block_id);
 `);
 
-// migrações
+// migrações (versões antigas com "clientes")
 {
-  const cols = db.prepare("PRAGMA table_info(events)").all().map((c) => c.name);
+  const cols = db.prepare('PRAGMA table_info(events)').all().map((c) => c.name);
   if (!cols.includes('air_mode')) db.exec("ALTER TABLE events ADD COLUMN air_mode TEXT NOT NULL DEFAULT 'ask'");
   if (!cols.includes('on_air_at')) db.exec('ALTER TABLE events ADD COLUMN on_air_at TEXT');
-  const ver = db.prepare('PRAGMA user_version').get().user_version;
-  if (ver < 1) { db.exec(`UPDATE orgs SET max_events = ${DEFAULT_MAX_EVENTS} WHERE max_events IS NULL OR max_events = 0; PRAGMA user_version = 1;`); }
+  if (cols.includes('org_id')) {
+    // sem clientes: cada evento passa a pertencer a um utilizador
+    console.log('A migrar base de dados: remover clientes, eventos passam a ser por utilizador…');
+    const hasOrgs = !!db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='orgs'").get();
+    db.exec('PRAGMA foreign_keys = OFF');
+    db.exec('BEGIN');
+    try {
+      db.exec(`
+        CREATE TABLE users_new (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          email TEXT NOT NULL UNIQUE COLLATE NOCASE,
+          name TEXT NOT NULL DEFAULT '',
+          role TEXT NOT NULL DEFAULT 'user' CHECK (role IN ('superadmin','user')),
+          pass TEXT NOT NULL,
+          active INTEGER NOT NULL DEFAULT 1,
+          max_events INTEGER NOT NULL DEFAULT 5,
+          created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        INSERT INTO users_new (id, email, name, role, pass, active, max_events, created_at)
+          SELECT u.id, u.email, u.name, CASE WHEN u.role = 'superadmin' THEN 'superadmin' ELSE 'user' END, u.pass,
+            ${hasOrgs ? "CASE WHEN u.active = 1 AND (u.role = 'superadmin' OR COALESCE((SELECT active FROM orgs WHERE id = u.org_id), 1) = 1) THEN 1 ELSE 0 END" : 'u.active'},
+            ${hasOrgs ? `COALESCE((SELECT NULLIF(max_events, 0) FROM orgs WHERE id = u.org_id), ${DEFAULT_MAX_EVENTS})` : DEFAULT_MAX_EVENTS}, u.created_at
+          FROM users u;
+        CREATE TABLE events_new (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          name TEXT NOT NULL, date TEXT DEFAULT '', venue TEXT DEFAULT '', notes TEXT DEFAULT '',
+          current_block_id INTEGER, archived INTEGER NOT NULL DEFAULT 0,
+          air_mode TEXT NOT NULL DEFAULT 'ask', on_air_at TEXT,
+          created_at TEXT NOT NULL DEFAULT (datetime('now')), updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        INSERT INTO events_new (id, user_id, name, date, venue, notes, current_block_id, archived, air_mode, on_air_at, created_at, updated_at)
+          SELECT e.id,
+            COALESCE((SELECT MIN(id) FROM users WHERE org_id = e.org_id AND role != 'superadmin'), (SELECT MIN(id) FROM users WHERE role = 'superadmin')),
+            e.name, e.date, e.venue, e.notes, e.current_block_id, e.archived, e.air_mode, e.on_air_at, e.created_at, e.updated_at
+          FROM events e;
+        DROP TABLE events; ALTER TABLE events_new RENAME TO events;
+        DROP TABLE users; ALTER TABLE users_new RENAME TO users;
+        ${hasOrgs ? 'DROP TABLE orgs;' : ''}
+      `);
+      db.exec('COMMIT');
+    } catch (e) { db.exec('ROLLBACK'); throw e; }
+    db.exec('PRAGMA foreign_keys = ON');
+  }
+  db.exec('CREATE INDEX IF NOT EXISTS ix_events_user ON events(user_id); PRAGMA user_version = 2;');
 }
 
 // ---------- helpers ----------
@@ -140,7 +176,7 @@ const forbid = (m = 'Sem permissão') => new HttpError(403, m);
 const notFound = (m = 'Não encontrado') => new HttpError(404, m);
 
 const MIC_TYPES = ['mao', 'lapela', 'headset', 'instrumento', 'pulpito', 'ambiente', 'outro'];
-const ROLES = ['superadmin', 'admin', 'operator', 'viewer'];
+const ROLES = ['superadmin', 'user'];
 const s = (v, max = 500) => (v == null ? '' : String(v).trim().slice(0, max));
 const timeRe = /^([01]?\d|2[0-3])[:hH.]([0-5]\d)$/;
 function normTime(v) {
@@ -155,7 +191,7 @@ function normTime(v) {
 if (!get('SELECT id FROM users WHERE role = ?', 'superadmin')) {
   const email = process.env.ADMIN_EMAIL || 'admin@micdesk.local';
   const pw = process.env.ADMIN_PASSWORD || crypto.randomBytes(6).toString('base64url');
-  run('INSERT INTO users (org_id, email, name, role, pass) VALUES (NULL, ?, ?, ?, ?)', email, 'Super Admin', 'superadmin', hashPass(pw));
+  run('INSERT INTO users (email, name, role, pass, max_events) VALUES (?, ?, ?, ?, 0)', email, 'Super Admin', 'superadmin', hashPass(pw));
   console.log('================================================');
   console.log(' Super admin criado');
   console.log(' Email:    ' + email);
@@ -189,11 +225,9 @@ function parseCookies(req) {
 function getUser(req) {
   const tok = parseCookies(req).mdsess;
   if (!tok) return null;
-  const row = get(`SELECT u.id, u.org_id, u.email, u.name, u.role, u.active, o.active AS org_active, o.name AS org_name
-    FROM sessions s JOIN users u ON u.id = s.user_id LEFT JOIN orgs o ON o.id = u.org_id
-    WHERE s.token = ? AND s.expires > ?`, tok, Date.now());
+  const row = get(`SELECT u.id, u.email, u.name, u.role, u.active, u.max_events
+    FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.token = ? AND s.expires > ?`, tok, Date.now());
   if (!row || !row.active) return null;
-  if (row.role !== 'superadmin' && !row.org_active) return null;
   return row;
 }
 function setSessionCookie(res, token, maxAge) {
@@ -209,12 +243,11 @@ function rateLimit(ip) {
 }
 
 // ---------- access control ----------
-const canWrite = (u) => u.role !== 'viewer';
-const isAdmin = (u) => u.role === 'superadmin' || u.role === 'admin';
+const isSuper = (u) => u.role === 'superadmin';
 function eventFor(u, id) {
   const ev = get('SELECT * FROM events WHERE id = ?', Number(id));
   if (!ev) throw notFound('Evento não encontrado');
-  if (u.role !== 'superadmin' && ev.org_id !== u.org_id) throw forbid();
+  if (!isSuper(u) && ev.user_id !== u.id) throw forbid();
   return ev;
 }
 const micFor = (u, id) => { const m = get('SELECT * FROM mics WHERE id = ?', Number(id)); if (!m) throw notFound(); eventFor(u, m.event_id); return m; };
@@ -223,7 +256,7 @@ const slotFor = (u, id) => {
   const sl = get('SELECT s.*, b.event_id FROM slots s JOIN blocks b ON b.id = s.block_id WHERE s.id = ?', Number(id));
   if (!sl) throw notFound(); eventFor(u, sl.event_id); return sl;
 };
-function needWrite(u) { if (!canWrite(u)) throw forbid('Utilizador só de leitura'); }
+function needWrite() { }
 
 function fullEvent(ev) {
   const mics = all('SELECT * FROM mics WHERE event_id = ? ORDER BY sort, id', ev.id);
@@ -232,8 +265,8 @@ function fullEvent(ev) {
   const byBlock = {};
   for (const sl of slots) (byBlock[sl.block_id] ||= []).push(sl);
   for (const b of blocks) b.slots = byBlock[b.id] || [];
-  const org = get('SELECT id, name FROM orgs WHERE id = ?', ev.org_id);
-  return { event: ev, org, mics, blocks };
+  const owner = get('SELECT id, name, email FROM users WHERE id = ?', ev.user_id);
+  return { event: ev, owner, mics, blocks };
 }
 
 const DEFAULT_COLORS = ['#3fa67a', '#5a8a3c', '#8f8a2c', '#a8740a', '#a85a12', '#a04a14', '#9a3518', '#8f1f1f', '#2d6fa8', '#6a4aa8', '#a84a8a', '#4a8a8f'];
@@ -250,9 +283,9 @@ function route(method, pattern, handler, opts = {}) {
 route('POST', '/api/login', async (req, res, body) => {
   const ip = req.headers['x-forwarded-for']?.split(',')[0].trim() || req.socket.remoteAddress;
   rateLimit(ip);
-  const u = get('SELECT u.*, o.active AS org_active FROM users u LEFT JOIN orgs o ON o.id = u.org_id WHERE u.email = ?', s(body.email, 200));
+  const u = get('SELECT * FROM users WHERE email = ?', s(body.email, 200));
   if (!u || !checkPass(String(body.password || ''), u.pass)) throw new HttpError(401, 'Email ou password errados');
-  if (!u.active || (u.role !== 'superadmin' && !u.org_active)) throw forbid('Conta desativada');
+  if (!u.active) throw forbid('Conta desativada');
   loginAttempts.delete(ip);
   const token = crypto.randomBytes(32).toString('hex');
   run('INSERT INTO sessions (token, user_id, expires) VALUES (?, ?, ?)', token, u.id, Date.now() + SESSION_DAYS * 864e5);
@@ -277,74 +310,30 @@ route('POST', '/api/me/password', (req, res, body, p, u) => {
   return { ok: true };
 });
 
-// orgs (clientes) — superadmin
-route('GET', '/api/orgs', (req, res, b, p, u) => {
-  if (u.role !== 'superadmin') throw forbid();
-  return all(`SELECT o.*, (SELECT COUNT(*) FROM users WHERE org_id = o.id) AS users,
-    (SELECT COUNT(*) FROM events WHERE org_id = o.id) AS events FROM orgs o ORDER BY o.name`);
-});
-route('POST', '/api/orgs', (req, res, body, p, u) => {
-  if (u.role !== 'superadmin') throw forbid();
-  const name = s(body.name, 120); if (!name) throw bad('Nome obrigatório');
-  const r = run('INSERT INTO orgs (name, contact, max_events) VALUES (?, ?, ?)', name, s(body.contact), body.max_events == null || body.max_events === '' ? DEFAULT_MAX_EVENTS : Math.max(0, Number(body.max_events) || 0));
-  const orgId = Number(r.lastInsertRowid);
-  if (body.admin_email) {
-    const pw = s(body.admin_password) || crypto.randomBytes(6).toString('base64url');
-    if (get('SELECT id FROM users WHERE email = ?', s(body.admin_email, 200))) throw bad('Esse email já existe');
-    run('INSERT INTO users (org_id, email, name, role, pass) VALUES (?, ?, ?, ?, ?)', orgId, s(body.admin_email, 200), s(body.admin_name) || name, 'admin', hashPass(pw));
-    return { id: orgId, admin_password: pw };
-  }
-  return { id: orgId };
-});
-route('PUT', '/api/orgs/:id', (req, res, body, p, u) => {
-  if (u.role !== 'superadmin') throw forbid();
-  const o = get('SELECT * FROM orgs WHERE id = ?', p.id); if (!o) throw notFound();
-  run('UPDATE orgs SET name = ?, contact = ?, active = ?, max_events = ? WHERE id = ?',
-    s(body.name ?? o.name, 120) || o.name, s(body.contact ?? o.contact), body.active == null ? o.active : (body.active ? 1 : 0),
-    body.max_events == null ? o.max_events : Number(body.max_events) || 0, o.id);
-  if (body.active === false || body.active === 0) run('DELETE FROM sessions WHERE user_id IN (SELECT id FROM users WHERE org_id = ?)', o.id);
-  return { ok: true };
-});
-route('DELETE', '/api/orgs/:id', (req, res, b, p, u) => {
-  if (u.role !== 'superadmin') throw forbid();
-  run('DELETE FROM orgs WHERE id = ?', p.id);
-  return { ok: true };
-});
-
-// users
-route('GET', '/api/users', (req, res, b, p, u, query) => {
-  if (u.role !== 'superadmin') throw forbid('Só o super admin gere utilizadores');
-  if (u.role === 'superadmin') {
-    const org = query.get('org');
-    return org ? all('SELECT u.id, u.org_id, u.email, u.name, u.role, u.active, u.created_at, o.name AS org_name FROM users u LEFT JOIN orgs o ON o.id = u.org_id WHERE u.org_id = ? ORDER BY u.name', Number(org))
-      : all('SELECT u.id, u.org_id, u.email, u.name, u.role, u.active, u.created_at, o.name AS org_name FROM users u LEFT JOIN orgs o ON o.id = u.org_id ORDER BY o.name, u.name');
-  }
-  return all('SELECT id, org_id, email, name, role, active, created_at FROM users WHERE org_id = ? ORDER BY name', u.org_id);
-});
+// utilizadores — só o super admin
+const USER_COLS = `u.id, u.email, u.name, u.role, u.active, u.max_events, u.created_at,
+  (SELECT COUNT(*) FROM events WHERE user_id = u.id) AS events`;
+function needSuper(u) { if (!isSuper(u)) throw forbid('Só o super admin gere utilizadores'); }
+const maxEv = (v, def) => (v == null || v === '' ? def : Math.max(0, parseInt(v, 10) || 0));
+route('GET', '/api/users', (req, res, b, p, u) => { needSuper(u); return all(`SELECT ${USER_COLS} FROM users u ORDER BY (u.role = 'superadmin') DESC, u.name COLLATE NOCASE`); });
 route('POST', '/api/users', (req, res, body, p, u) => {
-  if (u.role !== 'superadmin') throw forbid('Só o super admin gere utilizadores');
-  const role = ROLES.includes(body.role) ? body.role : 'operator';
-  if (role === 'superadmin' && u.role !== 'superadmin') throw forbid();
-  const orgId = u.role === 'superadmin' ? (role === 'superadmin' ? null : Number(body.org_id) || null) : u.org_id;
-  if (role !== 'superadmin' && !orgId) throw bad('Escolhe o cliente');
+  needSuper(u);
+  const role = ROLES.includes(body.role) ? body.role : 'user';
   const email = s(body.email, 200); if (!/^\S+@\S+$/.test(email)) throw bad('Email inválido');
   if (get('SELECT id FROM users WHERE email = ?', email)) throw bad('Esse email já existe');
   const pw = s(body.password) || crypto.randomBytes(6).toString('base64url');
   if (pw.length < 6) throw bad('Password com pelo menos 6 caracteres');
-  const r = run('INSERT INTO users (org_id, email, name, role, pass) VALUES (?, ?, ?, ?, ?)', orgId, email, s(body.name, 120), role, hashPass(pw));
+  const r = run('INSERT INTO users (email, name, role, pass, max_events) VALUES (?, ?, ?, ?, ?)', email, s(body.name, 120), role, hashPass(pw), maxEv(body.max_events, DEFAULT_MAX_EVENTS));
   return { id: Number(r.lastInsertRowid), password: pw };
 });
 route('PUT', '/api/users/:id', (req, res, body, p, u) => {
-  if (u.role !== 'superadmin') throw forbid('Só o super admin gere utilizadores');
+  needSuper(u);
   const t = get('SELECT * FROM users WHERE id = ?', p.id); if (!t) throw notFound();
-  if (u.role !== 'superadmin' && t.org_id !== u.org_id) throw forbid();
-  let role = body.role ?? t.role;
-  if (!ROLES.includes(role)) role = t.role;
-  if (u.role !== 'superadmin' && (role === 'superadmin' || t.role === 'superadmin')) throw forbid();
+  const role = ROLES.includes(body.role) ? body.role : t.role;
   if (t.id === u.id && role !== t.role) throw bad('Não podes mudar o teu próprio papel');
   const active = body.active == null ? t.active : (body.active ? 1 : 0);
   if (t.id === u.id && !active) throw bad('Não te podes desativar a ti próprio');
-  run('UPDATE users SET name = ?, role = ?, active = ? WHERE id = ?', s(body.name ?? t.name, 120), role, active, t.id);
+  run('UPDATE users SET name = ?, role = ?, active = ?, max_events = ? WHERE id = ?', s(body.name ?? t.name, 120), role, active, maxEv(body.max_events, t.max_events), t.id);
   if (body.password) {
     if (String(body.password).length < 6) throw bad('Password com pelo menos 6 caracteres');
     run('UPDATE users SET pass = ? WHERE id = ?', hashPass(body.password), t.id);
@@ -354,47 +343,44 @@ route('PUT', '/api/users/:id', (req, res, body, p, u) => {
   return { ok: true };
 });
 route('DELETE', '/api/users/:id', (req, res, b, p, u) => {
-  if (u.role !== 'superadmin') throw forbid('Só o super admin gere utilizadores');
+  needSuper(u);
   const t = get('SELECT * FROM users WHERE id = ?', p.id); if (!t) throw notFound();
   if (t.id === u.id) throw bad('Não te podes apagar a ti próprio');
-  if (u.role !== 'superadmin' && (t.org_id !== u.org_id || t.role === 'superadmin')) throw forbid();
-  run('DELETE FROM users WHERE id = ?', t.id);
+  run('DELETE FROM users WHERE id = ?', t.id); // apaga também os eventos dele
   return { ok: true };
 });
 
 // events
 class LimitError extends HttpError { constructor(max) { super(409, `Chegaste ao limite de ${max} eventos. Apaga eventos passados para poderes criar um novo.`); this.limit = max; } }
-function checkLimit(org) {
-  if (!(org.max_events > 0)) return;
-  const c = get('SELECT COUNT(*) AS c FROM events WHERE org_id = ?', org.id).c;
-  if (c >= org.max_events) throw new LimitError(org.max_events);
+function checkLimit(userId) {
+  const owner = get('SELECT role, max_events FROM users WHERE id = ?', userId);
+  if (!owner || owner.role === 'superadmin' || !(owner.max_events > 0)) return;
+  const c = get('SELECT COUNT(*) AS c FROM events WHERE user_id = ?', userId).c;
+  if (c >= owner.max_events) throw new LimitError(owner.max_events);
 }
 route('GET', '/api/limits', (req, res, b, p, u) => {
-  if (u.role === 'superadmin') return { max: 0, used: 0 };
-  const org = get('SELECT max_events FROM orgs WHERE id = ?', u.org_id);
-  return { max: org?.max_events || 0, used: get('SELECT COUNT(*) AS c FROM events WHERE org_id = ?', u.org_id).c };
+  if (isSuper(u)) return { max: 0, used: 0 };
+  return { max: u.max_events || 0, used: get('SELECT COUNT(*) AS c FROM events WHERE user_id = ?', u.id).c };
 });
 route('GET', '/api/events', (req, res, b, p, u, query) => {
   const archived = query.get('archived') === '1' ? 1 : 0;
-  const base = `SELECT e.*, o.name AS org_name,
+  const base = `SELECT e.*, us.name AS owner_name, us.email AS owner_email,
     (SELECT COUNT(*) FROM mics WHERE event_id = e.id) AS mic_count,
     (SELECT COUNT(*) FROM blocks WHERE event_id = e.id) AS block_count,
     (SELECT COUNT(*) FROM mics WHERE event_id = e.id AND battery <= 1) AS low_batt
-    FROM events e JOIN orgs o ON o.id = e.org_id WHERE e.archived = ?`;
-  if (u.role === 'superadmin') {
-    const org = query.get('org');
-    return org ? all(base + ' AND e.org_id = ? ORDER BY e.date DESC, e.id DESC', archived, Number(org)) : all(base + ' ORDER BY e.date DESC, e.id DESC', archived);
+    FROM events e JOIN users us ON us.id = e.user_id WHERE e.archived = ?`;
+  const all_ = query.get('all') === '1'; // todos os estados (para o aviso de limite)
+  const where = all_ ? base.replace('WHERE e.archived = ?', 'WHERE (e.archived = ? OR 1)') : base;
+  if (isSuper(u)) {
+    const owner = Number(query.get('user')) || 0;
+    return owner ? all(where + ' AND e.user_id = ? ORDER BY e.date DESC, e.id DESC', archived, owner) : all(where + ' ORDER BY e.date DESC, e.id DESC', archived);
   }
-  return all(base + ' AND e.org_id = ? ORDER BY e.date DESC, e.id DESC', archived, u.org_id);
+  return all(where + ' AND e.user_id = ? ORDER BY e.date DESC, e.id DESC', archived, u.id);
 });
 route('POST', '/api/events', (req, res, body, p, u) => {
-  needWrite(u);
-  const orgId = u.role === 'superadmin' ? Number(body.org_id) : u.org_id;
-  const org = get('SELECT * FROM orgs WHERE id = ?', orgId);
-  if (!org) throw bad('Escolhe o cliente');
-  checkLimit(org);
+  checkLimit(u.id);
   const name = s(body.name, 160); if (!name) throw bad('Nome do evento obrigatório');
-  const r = run('INSERT INTO events (org_id, name, date, venue, notes, air_mode) VALUES (?, ?, ?, ?, ?, ?)', orgId, name, s(body.date, 20), s(body.venue, 200), s(body.notes, 4000), ['auto', 'ask', 'manual'].includes(body.air_mode) ? body.air_mode : 'ask');
+  const r = run('INSERT INTO events (user_id, name, date, venue, notes, air_mode) VALUES (?, ?, ?, ?, ?, ?)', u.id, name, s(body.date, 20), s(body.venue, 200), s(body.notes, 4000), ['auto', 'ask', 'manual'].includes(body.air_mode) ? body.air_mode : 'ask');
   const id = Number(r.lastInsertRowid);
   if (body.template === 'standard') {
     const preset = [['Head', 'headset'], ['Púlpito', 'pulpito'], ['1', 'mao'], ['2', 'mao'], ['3', 'mao'], ['4', 'mao'], ['5', 'lapela'], ['6', 'lapela'], ['7', 'lapela'], ['8', 'lapela']];
@@ -430,9 +416,9 @@ route('DELETE', '/api/events/:id', (req, res, b, p, u) => {
 route('POST', '/api/events/:id/duplicate', (req, res, body, p, u) => {
   needWrite(u);
   const ev = eventFor(u, p.id);
-  checkLimit(get('SELECT * FROM orgs WHERE id = ?', ev.org_id));
+  checkLimit(ev.user_id);
   return tx(() => {
-    const r = run('INSERT INTO events (org_id, name, date, venue, notes, air_mode) VALUES (?, ?, ?, ?, ?, ?)', ev.org_id, s(body.name, 160) || ev.name + ' (cópia)', s(body.date, 20) || ev.date, ev.venue, ev.notes, ev.air_mode);
+    const r = run('INSERT INTO events (user_id, name, date, venue, notes, air_mode) VALUES (?, ?, ?, ?, ?, ?)', ev.user_id, s(body.name, 160) || ev.name + ' (cópia)', s(body.date, 20) || ev.date, ev.venue, ev.notes, ev.air_mode);
     const nid = Number(r.lastInsertRowid);
     const micMap = {};
     for (const m of all('SELECT * FROM mics WHERE event_id = ? ORDER BY sort, id', ev.id)) {
@@ -645,7 +631,7 @@ route('GET', '/api/events/:id/stream', (req, res, b, p, u) => {
 route('GET', '/api/admin/stats', (req, res, b, p, u) => {
   if (u.role !== 'superadmin') throw forbid();
   return {
-    orgs: get('SELECT COUNT(*) c FROM orgs').c, users: get('SELECT COUNT(*) c FROM users').c,
+    users: get('SELECT COUNT(*) c FROM users').c,
     events: get('SELECT COUNT(*) c FROM events').c, mics: get('SELECT COUNT(*) c FROM mics').c,
     live_connections: [...streams.values()].reduce((a, x) => a + x.size, 0),
   };

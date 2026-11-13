@@ -1,6 +1,6 @@
 # MicDesk — Gestão de microfones para eventos
 
-App web (iPad, telemóvel e PC) para gerir microfones, pilhas e o alinhamento de oradores, com vários clientes e painel de administração. Tudo sincroniza em tempo real entre os dispositivos.
+App web (iPad, telemóvel e PC) para gerir microfones, pilhas e o alinhamento de oradores, com várias contas de utilizador e painel de administração. Tudo sincroniza em tempo real entre os dispositivos.
 
 ## O que faz
 
@@ -17,9 +17,8 @@ App web (iPad, telemóvel e PC) para gerir microfones, pilhas e o alinhamento de
   - **Manual**: o bloco só muda quando alguém carrega em **● Pôr no ar**.
   Em qualquer um dos modos podes pôr um bloco no ar ou tirá-lo à mão.
 - **Ao vivo** (para o iPad na régie ou no palco): relógio, quem está em palco, o que vem a seguir e o que é preciso recolher a quem. Os botões Anterior/Próximo funcionam em todos os ecrãs ao mesmo tempo.
-- **Clientes** (multi-empresa): cada cliente tem os seus eventos e utilizadores, que ficam isolados dos outros. Podes suspender um cliente ou mudar-lhe o limite de eventos.
-- **Papéis**: Super admin (tu) · Administrador do cliente · Operador · Só leitura. **Só o super admin cria e gere utilizadores e clientes.**
-- **Limite de eventos**: cada cliente pode ter até **5 eventos** (o super admin pode mudar o limite por cliente; 0 = sem limite). Quando chega ao limite aparece um aviso com a lista dos eventos, os passados em primeiro, para apagar.
+- **Utilizadores**: só o super admin (tu) cria utilizadores (os teus colegas). Cada utilizador só vê e gere os seus próprios eventos; o super admin vê os eventos de todos e pode filtrar por utilizador.
+- **Limite de eventos**: cada utilizador pode ter até **5 eventos** (o super admin muda o limite por utilizador; 0 = sem limite). Ao chegar ao limite aparece um aviso com a lista dos eventos, passados primeiro, para apagar.
 - **Criar evento**: só o nome é obrigatório; data, local, modo ON AIR e micros base estão em *Mais opções*.
 - Duplicar eventos (para reutilizar micros e alinhamento) e arquivar.
 
@@ -54,13 +53,13 @@ O container aparece no Portainer como `micdesk` e podes geri-lo a partir daí (l
 
 Abre `http://IP-DO-SERVIDOR:3000` e entra com o `ADMIN_EMAIL` e a `ADMIN_PASSWORD` que definiste.
 
-1. Vai a **Clientes → + Novo cliente**. Podes criar logo o administrador desse cliente, e a app mostra as credenciais para lhe enviares.
-2. O cliente entra, cria eventos e adiciona os operadores da equipa dele.
+1. Vai a **Utilizadores → + Utilizador** e cria uma conta para cada colega. A app mostra as credenciais para lhe enviares.
+2. Cada colega entra, cria os seus eventos (só o nome é obrigatório) e gere micros e alinhamento.
 
 > O email e a password do admin só são usados **no primeiro arranque**. Depois disso, a password muda-se em *A minha conta*.
 > Se deixares `ADMIN_PASSWORD` vazio, é gerada uma password aleatória, que aparece nos logs do container.
 
-### Domínio + HTTPS (recomendado para clientes)
+### Domínio + HTTPS (recomendado)
 
 Põe a app atrás do proxy que já usas (Nginx Proxy Manager, Traefik ou Caddy) a apontar para a porta 3000, e depois muda `COOKIE_SECURE` para `"true"`.
 O tempo real usa Server-Sent Events. No Nginx Proxy Manager funciona sem configuração; num nginx manual, junta `proxy_buffering off;` na location.
@@ -90,5 +89,5 @@ Abre o endereço no Safari, carrega em **Partilhar → Adicionar ao ecrã princi
 | `ADMIN_PASSWORD` | (aleatória) | Password do super admin no 1º arranque |
 | `COOKIE_SECURE` | false | `true` quando a app estiver atrás de HTTPS |
 | `SESSION_DAYS` | 30 | Dias até a sessão expirar |
-| `DEFAULT_MAX_EVENTS` | 5 | Limite de eventos para novos clientes |
+| `DEFAULT_MAX_EVENTS` | 5 | Limite de eventos para novos utilizadores |
 | `DATA_DIR` | /data | Pasta da base de dados |
