@@ -1065,10 +1065,11 @@ function micGrid(cols, { airId, editable, live } = {}) {
     return i < 0 ? '<span class="gtag">ANTES</span>' : i === 0 ? '<span class="onair">ON AIR</span>' : i === 1 ? '<span class="gtag next">A SEGUIR</span>' : '<span class="gtag">DEPOIS</span>';
   };
   const head = `<tr><th class="sticky gcorner">Micro</th>${cols.map((b) => b.kind === 'intervalo'
-    ? `<th class="gbreak"><div class="gh"><b class="gtime">${esc(b.start_time || '')}</b><small>☕</small></div></th>`
+    ? `<th class="gbreak ${b.id === airId ? 'gair' : ''}"><div class="gh">${b.id === airId ? '<span class="onair">ON AIR</span>' : ''}<span class="brkcup">☕</span><b class="gtime">${esc(b.start_time || '')}</b><small>${esc(b.title || 'Intervalo')}</small></div></th>`
     : `<th class="${b.id === airId ? 'gair' : ''}"><button class="gh" ${editable ? `data-editblock="${b.id}"` : ''}>${tag(b)}<b class="gtime">${esc(b.start_time || '--:--')}</b>${b.id === airId ? '<span class="tmini" data-t="mini"></span>' : ''}<small>${esc(b.title || (b.slots.length > 1 ? `Painel · ${b.slots.length}` : ''))}</small></button></th>`).join('')}</tr>`;
-  const cell = (b, m) => {
-    if (b.kind === 'intervalo') return '<td class="gbreak"></td>';
+  const rowCount = rows.length + (hasFree ? 1 : 0);
+  const cell = (b, m, ri) => {
+    if (b.kind === 'intervalo') return ri === 0 ? `<td class="gbreak gbreakbody ${b.id === airId ? 'gair' : ''}" rowspan="${rowCount}"><div class="brkv">☕ ${esc(b.title || 'Intervalo')} · ${esc(b.start_time || '')}${b.end_time ? '–' + esc(b.end_time) : ''}</div></td>` : '';
     const air = b.id === airId ? ' gair' : '';
     const here = occ[b.id]?.[m.id];
     if (!here) return `<td class="gfree${air}">${editable ? `<button class="gc add" data-gridadd="${b.id}:${m.id}" aria-label="Dar micro ${esc(m.label)}">+</button>` : ''}</td>`;
@@ -1088,8 +1089,8 @@ function micGrid(cols, { airId, editable, live } = {}) {
     const act = live ? (b.id === airId ? `data-done="${here[0].id}"` : needsMiking(m) ? `data-miked="${here[0].id}"` : '') : editable ? `data-editslot="${here[0].id}"` : '';
     return `<td class="gused${air}${swap ? ' gswap' : ''}${dup ? ' gdup' : ''}"><button class="gc ${live && b.id === airId && here[0].done ? 'on' : ''}" ${act} style="--mc:${esc(m.color)}">${names}${sub}</button></td>`;
   };
-  const body = rows.map((m) => `<tr><td class="sticky"><div class="gm">${chip(m)}<div class="gmi"><b>${esc(m.person || TYPES[m.type])}</b><small>${m.person ? TYPES[m.type] : ''}${m.channel ? `${m.person ? ' · ' : ''}canal ${esc(m.channel)}` : ''}</small></div>${batt(m.battery)}</div></td>${cols.map((b) => cell(b, m)).join('')}</tr>`).join('');
-  const freeRow = hasFree ? `<tr><td class="sticky"><div class="gm"><span class="chip none">—</span><div class="gmi"><b>Sem micro</b></div></div></td>${cols.map((b) => b.kind === 'intervalo' ? '<td class="gbreak"></td>'
+  const body = rows.map((m, ri) => `<tr><td class="sticky"><div class="gm">${chip(m)}<div class="gmi"><b>${esc(m.person || TYPES[m.type])}</b><small>${m.person ? TYPES[m.type] : ''}${m.channel ? `${m.person ? ' · ' : ''}canal ${esc(m.channel)}` : ''}</small></div>${batt(m.battery)}</div></td>${cols.map((b) => cell(b, m, ri)).join('')}</tr>`).join('');
+  const freeRow = hasFree ? `<tr><td class="sticky"><div class="gm"><span class="chip none">—</span><div class="gmi"><b>Sem micro</b></div></div></td>${cols.map((b) => b.kind === 'intervalo' ? (rows.length ? '' : `<td class="gbreak gbreakbody"><div class="brkv">☕ ${esc(b.title || 'Intervalo')}</div></td>`)
     : `<td class="${b.id === airId ? 'gair' : ''}">${(free[b.id] || []).map((sl) => `<button class="gc nomic" ${editable ? `data-editslot="${sl.id}"` : ''}><span class="gn">${esc(sl.speaker)}</span><span class="gs bad">sem micro</span></button>`).join('')}</td>`).join('')}</tr>` : '';
   return `<table class="mgrid ${live ? 'live' : ''}">${head}${body}${freeRow}</table>`;
 }
@@ -1659,7 +1660,9 @@ function applyGridPrefs(root = document) {
     const talk = Math.max(1, cols.length - breaks);
     const visTalk = v.showAll ? Math.min(talk, v.before + 1 + v.after) : talk;
     const visBreaks = v.showAll ? Math.min(breaks, 1) : breaks;
-    let colW = v.fit ? Math.floor((vw - stickyW - visBreaks * 46 - 8 - visTalk * 2) / visTalk) : 160;
+    const brkW = Math.max(72, Math.min(110, Math.round(vw * 0.06)));
+    tbl.style.setProperty('--g-brk', brkW + 'px');
+    let colW = v.fit ? Math.floor((vw - stickyW - visBreaks * (brkW + 2) - 8 - visTalk * 2) / visTalk) : 160;
     colW = Math.max(v.fit ? 96 : 110, colW);
     if (v.colw > 0) colW = v.colw; // largura escolhida à mão
     const name = v.name || Math.round(Math.max(13, Math.min(24, colW / 9)));

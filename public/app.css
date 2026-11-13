@@ -579,3 +579,13 @@ code { background: var(--panel2); padding: 1px 6px; border-radius: 5px; font-siz
 .mvrow { display: flex; align-items: center; gap: 10px; padding: 7px 0; border-bottom: 1px solid var(--line); }
 .mvrow:last-child { border-bottom: 0; }
 @media (max-width: 560px) { .mvbtns .btn { width: 30px; } }
+
+/* intervalo (coffee break) legível na grelha */
+th.gbreak, td.gbreak, .mgrid.tuned th.gbreak .gh { min-width: var(--g-brk, 92px) !important; width: var(--g-brk, 92px) !important; max-width: var(--g-brk, 92px) !important; }
+th.gbreak .gh { padding: 10px 4px; gap: 2px; }
+th.gbreak .gtime { font-size: calc(var(--g-time, 24px) * .8) !important; }
+th.gbreak small { color: #e8c37a; font-weight: 700; white-space: normal; text-align: center; line-height: 1.15; max-width: 100%; }
+.brkcup { font-size: 20px; line-height: 1; }
+td.gbreakbody { vertical-align: top; text-align: center; background: repeating-linear-gradient(135deg, #1d1a14, #1d1a14 8px, #221e16 8px, #221e16 16px) !important; }
+.brkv { writing-mode: vertical-rl; transform: rotate(180deg); margin: 0 auto; padding: 16px 0; position: sticky; top: 8px; font-weight: 800; letter-spacing: 2px; text-transform: uppercase; color: #e8c37a; font-size: clamp(14px, calc(var(--g-name, 17px) * .95), 24px); white-space: nowrap; }
+td.gbreakbody.gair { box-shadow: inset 0 0 0 2px var(--air); }
