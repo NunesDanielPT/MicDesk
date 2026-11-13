@@ -589,7 +589,12 @@ function renderEvent(tab) {
   else content = viewRundown();
   const head = tab === 'live' ? '' : `<div class="row" style="justify-content:space-between;flex-wrap:wrap;gap:6px">
       <div style="min-width:0"><h1>${esc(event.name)}</h1><div class="muted small">${esc(fmtDate(event.date))}${event.venue ? ' · ' + esc(event.venue) : ''}${isSuper() && owner ? ' · <span style="color:var(--info)">' + esc(owner.name || owner.email) + '</span>' : ''}</div></div></div>`;
+  const gw = $('.gridwrap');
+  const keep = gw && state.gridKey === `${tab}:${event.current_block_id}` ? { l: gw.scrollLeft, t: gw.scrollTop } : null;
+  const wy = window.scrollY;
   app.innerHTML = shell(head + content, { crumb, tabs });
+  state.gridScrollKeep = keep; state.gridKey = `${tab}:${event.current_block_id}`;
+  if (keep) window.scrollTo(0, wy);
   bindEvent(tab);
   updateTimers();
 }
@@ -1317,7 +1322,9 @@ function bindEvent(tab) {
       if (!cur) return;
       const on = !cur.miked; cur.miked = on ? 1 : 0;
       if (el.classList.contains('mik')) { el.classList.toggle('on', on); $('span', el).textContent = on ? 'Micado' : 'Por micar'; }
-      await act(() => api('PUT', `/api/slots/${id}`, { miked: on })); return scheduleReload();
+      const r = await act(() => api('PUT', `/api/slots/${id}`, { miked: on }));
+      if (r && r.propagated) toast(`${cur.speaker}: ${on ? 'micado' : 'por micar'} também em mais ${r.propagated} bloco${r.propagated > 1 ? 's' : ''} seguinte${r.propagated > 1 ? 's' : ''} (mesmo micro)`);
+      return scheduleReload();
     }
     if (t('[data-notifperm]')) { try { await Notification.requestPermission(); } catch { } return renderEvent('log'); }
     if ((el = t('[data-rmmember]'))) {
@@ -1430,7 +1437,9 @@ function bindEvent(tab) {
   if (state.focusAdd) { $(`[data-addslot="${state.focusAdd}"] input`)?.focus(); state.focusAdd = null; }
   // grelha: garantir que a coluna ON AIR fica visível (no telemóvel aparece logo a seguir à coluna dos micros)
   const air = $('.gridwrap th.gair');
-  if (air) {
+  if (state.gridScrollKeep && $('.gridwrap')) {
+    const w = $('.gridwrap'); w.scrollLeft = state.gridScrollKeep.l; w.scrollTop = state.gridScrollKeep.t; state.gridScrollKeep = null;
+  } else if (air) {
     const wrap = air.closest('.gridwrap'); const stickyW = $('.gcorner', wrap)?.offsetWidth || 0;
     const r = air.getBoundingClientRect(), wr = wrap.getBoundingClientRect();
     if (r.right > wr.right) wrap.scrollLeft += r.left - (wr.left + stickyW);

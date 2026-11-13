@@ -498,3 +498,11 @@ td.gair.gfree { background: #1a1213; }
 .gs.nomk { color: var(--warn); border: 1px dashed #5a4612; }
 @media (max-width: 560px) { .mik span { display: none; } .mik { padding: 0 8px; } .slot .batt { display: none; } }
 @media (max-width: 560px) { .block .title .mikcount { display: flex; margin-left: 0; white-space: nowrap; } .block .bh .btn.airsoft, .block .bh .btn.airoff { padding: 0 8px; font-size: 13px; } }
+
+/* scroll das grelhas em ecrãs tácteis (iPad / telemóvel):
+   sem scroll vertical interno — a página desliza na vertical, a grelha só na horizontal */
+.gridwrap, .matrixwrap { -webkit-overflow-scrolling: touch; overscroll-behavior-x: contain; touch-action: pan-x pan-y; }
+.gc, .cell, .gh, .chh, .outh { touch-action: pan-x pan-y; }
+@media (hover: none), (pointer: coarse) {
+  .gridwrap, .matrixwrap { max-height: none; overflow-x: auto; overflow-y: visible; }
+}

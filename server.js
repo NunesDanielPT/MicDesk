@@ -780,8 +780,19 @@ route('PUT', '/api/slots/:id', (req, res, body, p, u) => {
   const miked = body.miked != null ? (body.miked ? 1 : 0) : (micId !== sl.mic_id ? 0 : sl.miked);
   run('UPDATE slots SET speaker=?, role=?, mic_id=?, done=?, block_id=?, miked=? WHERE id=?',
     s(body.speaker ?? sl.speaker, 160), s(body.role ?? sl.role, 80), micId, body.done == null ? sl.done : (body.done ? 1 : 0), blockId, miked, sl.id);
-  changed(u, sl.event_id, slotDiff(sl, body, micId, blockId));
-  return { ok: true };
+  // a mesma pessoa com o mesmo micro nos blocos seguintes fica também micada / por micar
+  let propagated = 0;
+  if (body.miked != null && body.propagate !== false && micId) {
+    const order = all("SELECT id FROM blocks WHERE event_id = ? ORDER BY CASE WHEN start_time = '' THEN 1 ELSE 0 END, start_time, sort, id", sl.event_id).map((r) => r.id);
+    const idx = order.indexOf(blockId);
+    const later = new Set(order.slice(idx + 1));
+    const name = s(body.speaker ?? sl.speaker, 160).trim().toLowerCase();
+    for (const o of all('SELECT s.id, s.block_id, s.speaker, s.miked FROM slots s JOIN blocks b ON b.id = s.block_id WHERE b.event_id = ? AND s.mic_id = ? AND s.id != ?', sl.event_id, micId, sl.id)) {
+      if (later.has(o.block_id) && o.speaker.trim().toLowerCase() === name && o.miked !== miked) { run('UPDATE slots SET miked = ? WHERE id = ?', miked, o.id); propagated++; }
+    }
+  }
+  changed(u, sl.event_id, slotDiff(sl, body, micId, blockId) + (propagated ? ` (e em mais ${propagated} bloco${propagated > 1 ? 's' : ''} seguinte${propagated > 1 ? 's' : ''})` : ''));
+  return { ok: true, propagated };
 });
 route('DELETE', '/api/slots/:id', (req, res, b, p, u) => {
   needWrite(u);

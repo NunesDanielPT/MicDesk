@@ -36,6 +36,7 @@ App web (iPad, telemóvel e PC) para gerir microfones, pilhas e o alinhamento de
   - O cabeçalho do bloco mostra quantos já estão micados (ex.: "1/6 micados").
   - As grelhas mostram "🎙 micado" ou "por micar".
   - No Ao vivo aparece quantas pessoas do próximo bloco ainda faltam micar. Tocar numa célula fora da coluna ON AIR marca essa pessoa como micada.
+  - Ao marcar alguém como micado (ou por micar), a mesma pessoa com o **mesmo micro** nos blocos seguintes muda também automaticamente.
   - Se mudares o micro de um orador, ele volta a "por micar". O púlpito e os micros de ambiente não usam este estado.
   - Fica tudo registado no histórico: "Rui micou Ana Branquinho (micro 4)".
 - **Grelha de micros no Alinhamento**: mostra o evento inteiro de uma vez. Para dar um micro a alguém nesse bloco, toca numa célula vazia.
