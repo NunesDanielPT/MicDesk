@@ -557,39 +557,139 @@ function viewRundown() {
   return toolbar + `<div class="blocks screenonly">${blocks.map(blockHtml).join('')}</div>` + print;
 }
 
+// estado dos micros para um bloco a uma dada hora (para criar/editar blocos com previsão)
+function micStateAt(time, selfId) {
+  const { blocks } = state.ev;
+  const prev = blocks.filter((x) => x.id !== selfId && x.kind !== 'intervalo' && (time ? (x.start_time && x.start_time < time) : true));
+  const next = time ? blocks.filter((x) => x.id !== selfId && x.kind !== 'intervalo' && x.start_time && x.start_time > time) : [];
+  const holder = {}; // micId -> {speaker, block}
+  for (const pb of prev) for (const sl of pb.slots) if (sl.mic_id) holder[sl.mic_id] = { speaker: sl.speaker, block: pb };
+  const nextUse = {}; // micId -> {speaker, block}
+  for (const nb of [...next].reverse()) for (const sl of nb.slots) if (sl.mic_id) nextUse[sl.mic_id] = { speaker: sl.speaker, block: nb };
+  return { prev, next, holder, nextUse };
+}
+function slotStatus(m, speaker, st, dupe) {
+  if (!m) return speaker.trim() ? '<span class="gs bad">sem micro</span>' : '';
+  const shared = ['pulpito', 'ambiente'].includes(m.type);
+  if (dupe && !shared) return '<span class="gs bad">⚠ micro repetido neste bloco</span>';
+  const h = st.holder[m.id];
+  if (h && !shared && !sameName(h.speaker, speaker)) return `<span class="gs warn">↺ recolher de ${esc(shortName(h.speaker))} (${esc(h.block.start_time || '?')})</span>`;
+  if (h && sameName(h.speaker, speaker)) return '<span class="gs cont">→ já está com ele/a</span>';
+  return '<span class="gs ok">✓ livre</span>';
+}
+
 function blockModal(b) {
   const isNew = !b.id;
   const kind = b.kind || 'painel';
   const { mics } = state.ev;
-  const micOpts = `<option value="">—</option>${mics.map((x) => `<option value="${x.id}">${esc(x.label)}${x.person ? ' · ' + esc(x.person) : ''}</option>`).join('')}`;
-  const speakerRows = isNew && kind === 'painel' ? `<label>Oradores (um por linha, podes deixar vazio e adicionar depois)</label>
-    <div id="newslots">${[0, 1, 2].map(() => `<div class="row" style="margin-bottom:6px"><input name="sp" placeholder="Nome do orador" class="grow"><select name="mi" style="width:130px">${micOpts}</select></div>`).join('')}</div>
-    <button type="button" class="btn sm" id="moresp">+ mais um</button>` : '';
-  const f = modal(isNew ? (kind === 'intervalo' ? 'Novo intervalo' : 'Novo bloco') : 'Editar bloco', `
+  const micById = Object.fromEntries(mics.map((m) => [m.id, m]));
+  const painel = kind === 'painel';
+  const initial = isNew ? [{}, {}, {}] : (b.slots || []).map((sl) => ({ id: sl.id, speaker: sl.speaker, mic_id: sl.mic_id }));
+  if (!isNew && painel && !initial.length) initial.push({});
+  const rowHtml = (r) => `<div class="sprow" ${r.id ? `data-sid="${r.id}"` : ''}>
+      <div class="row"><input name="sp" value="${esc(r.speaker || '')}" placeholder="Nome do orador" class="grow" autocomplete="off" list="speakers-dl">
+      <select name="mi" data-val="${r.mic_id || ''}" style="width:200px"></select>
+      <button type="button" class="btn sm icon ghost" data-rmrow aria-label="Remover">✕</button></div>
+      <div class="sphint"></div></div>`;
+  const speakerRows = painel ? `<label>Oradores e micros</label>
+    <div id="newslots">${initial.map(rowHtml).join('')}</div>
+    <button type="button" class="btn sm" id="moresp">+ mais um orador</button>
+    <datalist id="speakers-dl">${[...new Set(state.ev.blocks.flatMap((x) => x.slots.map((sl) => sl.speaker)))].map((n) => `<option value="${esc(n)}">`).join('')}</datalist>
+    <div class="label-up" style="margin-top:16px">Previsão dos micros</div>
+    <div id="bpreview" class="card pgridwrap"></div>` : '';
+  const f = modal(isNew ? (kind === 'intervalo' ? 'Novo intervalo' : 'Novo bloco / painel') : 'Editar bloco', `
     <div class="grid2"><div class="field"><label>Hora início</label><input name="start_time" type="time" value="${esc(b.start_time || '')}"></div>
     <div class="field"><label>Hora fim (opcional)</label><input name="end_time" type="time" value="${esc(b.end_time || '')}"></div></div>
     <div class="field"><label>${kind === 'intervalo' ? 'Nome' : 'Título do painel (opcional)'}</label><input name="title" value="${esc(b.title || (isNew && kind === 'intervalo' ? 'Coffee Break' : ''))}" placeholder="${kind === 'intervalo' ? 'Coffee Break' : 'Ex: Painel Inovação'}"></div>
     <div class="field"><label>Notas</label><input name="notes" value="${esc(b.notes || '')}" placeholder="Ex: vídeo antes, entrada pela esquerda"></div>
     ${!isNew ? `<div class="field"><label>Tipo</label><select name="kind"><option value="painel" ${kind === 'painel' ? 'selected' : ''}>Bloco / Painel</option><option value="intervalo" ${kind === 'intervalo' ? 'selected' : ''}>Intervalo</option></select></div>` : ''}
     ${speakerRows}`, {
+    wide: painel,
     submitLabel: isNew ? 'Criar' : 'Guardar',
     extraFooter: !isNew ? '<button type="button" class="btn danger" id="delblock">Apagar</button>' : '',
     onSubmit: async (d, form) => {
+      const rows = $$('.sprow', form).map((r) => ({ id: Number(r.dataset.sid) || null, speaker: $('[name=sp]', r).value.trim(), mic_id: $('[name=mi]', r).value || null }));
+      delete d.sp; delete d.mi;
       if (isNew) {
-        const sp = $$('[name=sp]', form).map((el) => el.value);
-        const mi = $$('[name=mi]', form).map((el) => el.value);
         d.kind = kind;
-        d.slots = sp.map((speaker, i) => ({ speaker, mic_id: mi[i] || null })).filter((x) => x.speaker.trim());
+        d.slots = rows.filter((x) => x.speaker);
         await api('POST', `/api/events/${state.evId}/blocks`, d);
-      } else await api('PUT', `/api/blocks/${b.id}`, d);
+      } else {
+        await api('PUT', `/api/blocks/${b.id}`, d);
+        if (painel) {
+          const keep = new Set(rows.filter((r) => r.id).map((r) => r.id));
+          for (const sl of b.slots) if (!keep.has(sl.id)) await api('DELETE', `/api/slots/${sl.id}`);
+          for (const r of rows) {
+            if (r.id && r.speaker) { const o = b.slots.find((x) => x.id === r.id); if (o.speaker !== r.speaker || String(o.mic_id || '') !== String(r.mic_id || '')) await api('PUT', `/api/slots/${r.id}`, { speaker: r.speaker, mic_id: r.mic_id }); }
+            else if (r.id && !r.speaker) await api('DELETE', `/api/slots/${r.id}`);
+            else if (!r.id && r.speaker) await api('POST', `/api/blocks/${b.id}/slots`, { speaker: r.speaker, mic_id: r.mic_id });
+          }
+        }
+      }
       scheduleReload();
     },
   });
-  $('#moresp', f)?.addEventListener('click', () => {
-    const row = document.createElement('div'); row.className = 'row'; row.style.marginBottom = '6px';
-    row.innerHTML = `<input name="sp" placeholder="Nome do orador" class="grow"><select name="mi" style="width:130px">${micOpts}</select>`;
-    $('#newslots', f).appendChild(row); $('input', row).focus();
+
+  // ---- previsão ao vivo enquanto se escreve ----
+  function refresh() {
+    if (!painel) return;
+    const time = $('[name=start_time]', f).value;
+    const st = micStateAt(time, b.id);
+    const rows = $$('.sprow', f).map((r) => ({ el: r, speaker: $('[name=sp]', r).value, sel: $('[name=mi]', r) }));
+    rows.forEach((r) => { if (!r.sel.options.length) r.sel.value = ''; });
+    const chosen = rows.map((r) => r.sel.value || r.sel.dataset.val || '');
+    const count = {}; chosen.forEach((v) => { if (v) count[v] = (count[v] || 0) + 1; });
+    // opções de cada select com o estado do micro
+    rows.forEach((r, i) => {
+      const cur = chosen[i];
+      r.sel.innerHTML = `<option value="">Micro…</option>` + mics.map((m) => {
+        const h = st.holder[m.id];
+        const taken = chosen.some((v, j) => j !== i && v === String(m.id)) && !['pulpito', 'ambiente'].includes(m.type);
+        const note = taken ? '⚠ já escolhido' : h ? `${shortName(h.speaker)} ${h.block.start_time || ''}` : 'livre';
+        return `<option value="${m.id}" ${String(m.id) === cur ? 'selected' : ''}>${esc(m.label)} — ${esc(note)}</option>`;
+      }).join('');
+      delete r.sel.dataset.val;
+      const m = micById[Number(cur)];
+      r.sel.style.cssText = `width:200px;max-width:45%;${m ? `box-shadow:inset 5px 0 0 ${m.color}` : ''}`;
+      r.el.querySelector('.sphint').innerHTML = r.speaker.trim() || m ? slotStatus(m, r.speaker, st, cur && count[cur] > 1) : '';
+    });
+    // grelha: últimos 3 blocos antes, este bloco, e o seguinte
+    const cols = st.prev.slice(-3);
+    const nextB = st.next[0];
+    const draft = {}; rows.forEach((r, i) => { if (chosen[i]) (draft[chosen[i]] ||= []).push(r.speaker.trim() || '(sem nome)'); });
+    const list = mics;
+    const occ = (blk, m) => blk.slots.filter((sl) => sl.mic_id === m.id).map((sl) => esc(shortName(sl.speaker))).join('<br>');
+    $('#bpreview', f).innerHTML = !mics.length ? '<div class="small muted" style="padding:12px">Ainda não há micros neste evento.</div>' : `<table class="pgrid">
+      <tr><th>Micro</th>${cols.map((c) => `<th>${esc(c.start_time || '--:--')}</th>`).join('')}<th class="pnew">${esc(time || 'este')}<br><small>ESTE BLOCO</small></th>${nextB ? `<th>${esc(nextB.start_time)}<br><small>depois</small></th>` : ''}</tr>
+      ${list.map((m) => {
+        const d = draft[m.id];
+        const shared = ['pulpito', 'ambiente'].includes(m.type);
+        const h = st.holder[m.id];
+        let cls = '', note = '';
+        if (d) {
+          if (d.length > 1 && !shared) { cls = 'bad'; note = 'repetido'; }
+          else if (h && !shared && !sameName(h.speaker, d[0])) { cls = 'warn'; note = `recolher de ${esc(shortName(h.speaker))}`; }
+          else cls = 'ok';
+        } else if (h) { note = `<span class="muted">fica com ${esc(shortName(h.speaker))}</span>`; }
+        else note = '<span style="color:var(--accent)">livre</span>';
+        return `<tr><td>${chip(m)}</td>${cols.map((c) => `<td>${occ(c, m)}</td>`).join('')}
+          <td class="pnew ${cls}">${d ? `<b>${d.map(esc).join('<br>')}</b>` : ''}${note ? `<small>${note}</small>` : ''}</td>
+          ${nextB ? `<td class="muted">${occ(nextB, m)}</td>` : ''}</tr>`;
+      }).join('')}
+    </table>
+    ${!cols.length ? `<div class="small muted" style="padding:8px 12px">Não há blocos antes ${time ? 'das ' + esc(time) : 'deste'} — todos os micros estão livres.</div>` : ''}`;
+  }
+  f.addEventListener('input', (e) => { if (e.target.matches('[name=sp], [name=start_time]')) refresh(); });
+  f.addEventListener('change', (e) => { if (e.target.matches('[name=mi], [name=start_time]')) refresh(); });
+  f.addEventListener('click', (e) => {
+    const rm = e.target.closest('[data-rmrow]');
+    if (rm) { rm.closest('.sprow').remove(); refresh(); }
   });
+  $('#moresp', f)?.addEventListener('click', () => {
+    const tmp = document.createElement('div'); tmp.innerHTML = rowHtml({});
+    const row = tmp.firstElementChild; $('#newslots', f).appendChild(row); refresh(); $('input', row).focus();
+  });
+  refresh();
   $('#delblock', f)?.addEventListener('click', async () => {
     closeModal();
     if (await confirmBox('Apagar bloco?', `O bloco das ${b.start_time || '--:--'} e os seus ${b.slots?.length || 0} oradores vão ser apagados.`)) {

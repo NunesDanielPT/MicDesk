@@ -334,3 +334,21 @@ td.gair.gfree { background: #1a1213; }
 .iguide[open] summary::before { content: '▾'; }
 .iguide ol { margin: 0; padding: 0 16px 14px 34px; line-height: 1.55; }
 .iguide li { margin-bottom: 6px; }
+
+/* previsão ao criar/editar bloco */
+.sprow { margin-bottom: 8px; }
+.sphint { min-height: 18px; margin: 3px 0 0 2px; }
+.gs.ok { color: var(--accent); background: rgba(52,195,143,.12); }
+.pgridwrap { padding: 0; overflow: auto; max-height: 340px; }
+.pgrid { border-collapse: collapse; width: 100%; font-size: 13px; }
+.pgrid th { position: sticky; top: 0; background: var(--panel2); color: var(--muted); font-weight: 700; padding: 8px; text-align: left; white-space: nowrap; z-index: 1; }
+.pgrid th small { font-size: 10px; letter-spacing: 1px; }
+.pgrid td { padding: 6px 8px; border-top: 1px solid var(--line); vertical-align: middle; line-height: 1.25; }
+.pgrid td small { display: block; font-size: 11px; margin-top: 2px; }
+.pgrid .chip { height: 26px; min-width: 38px; font-size: 13px; }
+.pgrid .pnew { background: rgba(78,161,255,.08); border-left: 2px solid var(--info); border-right: 2px solid var(--info); }
+.pgrid th.pnew { color: var(--info); }
+.pgrid td.pnew.ok b { color: var(--accent); }
+.pgrid td.pnew.warn small { color: var(--warn); font-weight: 600; }
+.pgrid td.pnew.bad { background: rgba(239,83,80,.15); }
+.pgrid td.pnew.bad small { color: var(--danger); font-weight: 700; }
