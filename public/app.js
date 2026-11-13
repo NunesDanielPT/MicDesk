@@ -1584,6 +1584,7 @@ function applyGridPrefs(root = document) {
     tbl.style.setProperty('--g-rowh', Math.max(d.rowh, Math.round(name * 3.3)) + 'px');
     tbl.style.setProperty('--g-stk', stickyW + 'px');
     tbl.classList.add('tuned'); tbl.classList.toggle('fit', !!v.fit);
+    tbl.classList.toggle('stk-narrow', stickyW < 170);
   });
 }
 let resizeT; window.addEventListener('resize', () => { clearTimeout(resizeT); resizeT = setTimeout(() => applyGridPrefs(), 120); });

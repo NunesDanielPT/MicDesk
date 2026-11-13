@@ -549,3 +549,22 @@ main.wide { max-width: none; }
 .rcv h3 { margin: 0 0 2px; }
 .rawpre { background: #0b0c0e; border: 1px solid var(--line); border-radius: 8px; padding: 10px; font-size: 12px; white-space: pre-wrap; word-break: break-all; max-height: 240px; overflow: auto; }
 code { background: var(--panel2); padding: 1px 6px; border-radius: 5px; font-size: 13px; }
+
+/* coluna dos micros na grelha: micro + bateria empilhados, nome com espaço próprio (não fica por baixo da bateria) */
+.gm { display: grid; grid-template-columns: auto minmax(0, 1fr); grid-template-rows: auto auto; column-gap: 10px; row-gap: 5px; align-items: center; }
+.gm > .chip { grid-column: 1; grid-row: 1; justify-self: start; }
+.gm > .batt { grid-column: 1; grid-row: 2; justify-self: start; margin-left: 2px; }
+.gm > .gmi { grid-column: 2; grid-row: 1 / span 2; min-width: 0; overflow: hidden; }
+.gm .gmi b, .gm .gmi small, .mgrid.tuned .gmi b { display: block; max-width: none; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.gm .gmi b { line-height: 1.25; }
+.gm .gmi small { line-height: 1.3; }
+.gm .chip { max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
+@media (max-width: 560px) { .gm .batt { display: inline-flex !important; } }
+/* coluna estreita (telemóvel): micro, nome e bateria uns por baixo dos outros */
+.mgrid.stk-narrow .gm { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto auto auto; row-gap: 4px; }
+.mgrid.stk-narrow .gm > .chip { grid-row: 1; }
+.mgrid.stk-narrow .gm > .gmi { grid-column: 1; grid-row: 2; }
+.mgrid.stk-narrow .gm > .batt { grid-row: 3; }
+.mgrid.stk-narrow .gm .gmi b { font-size: 12.5px; }
+.mgrid.stk-narrow .gm .gmi small { font-size: 11px; }
+@media (max-width: 560px) { .gm .chip { height: 28px; font-size: 13px; padding: 0 8px; min-width: 38px; } }
