@@ -46,6 +46,7 @@ CREATE TABLE IF NOT EXISTS events (
   archived INTEGER NOT NULL DEFAULT 0,
   air_mode TEXT NOT NULL DEFAULT 'ask',
   on_air_at TEXT,
+  console_model TEXT DEFAULT '',
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
   updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
@@ -90,6 +91,31 @@ CREATE TABLE IF NOT EXISTS battery_log (
   user_name TEXT DEFAULT '',
   at TEXT NOT NULL DEFAULT (datetime('now'))
 );
+CREATE TABLE IF NOT EXISTS console_channels (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  event_id INTEGER NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+  num TEXT NOT NULL DEFAULT '',
+  name TEXT NOT NULL DEFAULT '',
+  mic_id INTEGER REFERENCES mics(id) ON DELETE SET NULL,
+  input TEXT DEFAULT '',
+  phantom INTEGER NOT NULL DEFAULT 0,
+  notes TEXT DEFAULT '',
+  sort INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS console_outputs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  event_id INTEGER NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+  name TEXT NOT NULL DEFAULT '',
+  dest TEXT DEFAULT '',
+  sort INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS console_routes (
+  channel_id INTEGER NOT NULL REFERENCES console_channels(id) ON DELETE CASCADE,
+  output_id INTEGER NOT NULL REFERENCES console_outputs(id) ON DELETE CASCADE,
+  PRIMARY KEY (channel_id, output_id)
+);
+CREATE INDEX IF NOT EXISTS ix_cch_event ON console_channels(event_id);
+CREATE INDEX IF NOT EXISTS ix_cout_event ON console_outputs(event_id);
 CREATE INDEX IF NOT EXISTS ix_mics_event ON mics(event_id);
 CREATE INDEX IF NOT EXISTS ix_blocks_event ON blocks(event_id);
 CREATE INDEX IF NOT EXISTS ix_slots_block ON slots(block_id);
@@ -100,6 +126,7 @@ CREATE INDEX IF NOT EXISTS ix_slots_block ON slots(block_id);
   const cols = db.prepare('PRAGMA table_info(events)').all().map((c) => c.name);
   if (!cols.includes('air_mode')) db.exec("ALTER TABLE events ADD COLUMN air_mode TEXT NOT NULL DEFAULT 'ask'");
   if (!cols.includes('on_air_at')) db.exec('ALTER TABLE events ADD COLUMN on_air_at TEXT');
+  if (!cols.includes('console_model')) db.exec("ALTER TABLE events ADD COLUMN console_model TEXT DEFAULT ''");
   if (cols.includes('org_id')) {
     // sem clientes: cada evento passa a pertencer a um utilizador
     console.log('A migrar base de dados: remover clientes, eventos passam a ser por utilizador…');
@@ -128,13 +155,13 @@ CREATE INDEX IF NOT EXISTS ix_slots_block ON slots(block_id);
           user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
           name TEXT NOT NULL, date TEXT DEFAULT '', venue TEXT DEFAULT '', notes TEXT DEFAULT '',
           current_block_id INTEGER, archived INTEGER NOT NULL DEFAULT 0,
-          air_mode TEXT NOT NULL DEFAULT 'ask', on_air_at TEXT,
+          air_mode TEXT NOT NULL DEFAULT 'ask', on_air_at TEXT, console_model TEXT DEFAULT '',
           created_at TEXT NOT NULL DEFAULT (datetime('now')), updated_at TEXT NOT NULL DEFAULT (datetime('now'))
         );
-        INSERT INTO events_new (id, user_id, name, date, venue, notes, current_block_id, archived, air_mode, on_air_at, created_at, updated_at)
+        INSERT INTO events_new (id, user_id, name, date, venue, notes, current_block_id, archived, air_mode, on_air_at, console_model, created_at, updated_at)
           SELECT e.id,
             COALESCE((SELECT MIN(id) FROM users WHERE org_id = e.org_id AND role != 'superadmin'), (SELECT MIN(id) FROM users WHERE role = 'superadmin')),
-            e.name, e.date, e.venue, e.notes, e.current_block_id, e.archived, e.air_mode, e.on_air_at, e.created_at, e.updated_at
+            e.name, e.date, e.venue, e.notes, e.current_block_id, e.archived, e.air_mode, e.on_air_at, e.console_model, e.created_at, e.updated_at
           FROM events e;
         DROP TABLE events; ALTER TABLE events_new RENAME TO events;
         DROP TABLE users; ALTER TABLE users_new RENAME TO users;
@@ -266,7 +293,12 @@ function fullEvent(ev) {
   for (const sl of slots) (byBlock[sl.block_id] ||= []).push(sl);
   for (const b of blocks) b.slots = byBlock[b.id] || [];
   const owner = get('SELECT id, name, email FROM users WHERE id = ?', ev.user_id);
-  return { event: ev, owner, mics, blocks };
+  const console_ = {
+    channels: all('SELECT * FROM console_channels WHERE event_id = ? ORDER BY sort, id', ev.id),
+    outputs: all('SELECT * FROM console_outputs WHERE event_id = ? ORDER BY sort, id', ev.id),
+    routes: all('SELECT r.channel_id, r.output_id FROM console_routes r JOIN console_channels c ON c.id = r.channel_id WHERE c.event_id = ?', ev.id).map((r) => [r.channel_id, r.output_id]),
+  };
+  return { event: ev, owner, mics, blocks, console: console_ };
 }
 
 const DEFAULT_COLORS = ['#3fa67a', '#5a8a3c', '#8f8a2c', '#a8740a', '#a85a12', '#a04a14', '#9a3518', '#8f1f1f', '#2d6fa8', '#6a4aa8', '#a84a8a', '#4a8a8f'];
@@ -400,6 +432,7 @@ route('PUT', '/api/events/:id', (req, res, body, p, u) => {
     if (body.if_current !== undefined && (body.if_current || null) !== ev.current_block_id) return { ok: true, skipped: true };
   }
   const airMode = ['auto', 'ask', 'manual'].includes(body.air_mode) ? body.air_mode : ev.air_mode;
+  if (body.console_model !== undefined) run('UPDATE events SET console_model = ? WHERE id = ?', s(body.console_model, 120), ev.id);
   run(`UPDATE events SET name = ?, date = ?, venue = ?, notes = ?, current_block_id = ?, archived = ?, air_mode = ?${curBlock !== ev.current_block_id ? ", on_air_at = datetime('now')" : ''} WHERE id = ?`,
     s(body.name ?? ev.name, 160) || ev.name, s(body.date ?? ev.date, 20), s(body.venue ?? ev.venue, 200), s(body.notes ?? ev.notes, 4000),
     curBlock, body.archived == null ? ev.archived : (body.archived ? 1 : 0), airMode, ev.id);
@@ -426,6 +459,14 @@ route('POST', '/api/events/:id/duplicate', (req, res, body, p, u) => {
         nid, m.label, m.type, m.color, m.channel, m.frequency, body.keep_people ? m.person : '', 3, m.notes, m.sort);
       micMap[m.id] = Number(mr.lastInsertRowid);
     }
+    run('UPDATE events SET console_model = ? WHERE id = ?', ev.console_model || '', nid);
+    const chMap = {}, outMap = {};
+    for (const c of all('SELECT * FROM console_channels WHERE event_id = ?', ev.id))
+      chMap[c.id] = Number(run('INSERT INTO console_channels (event_id, num, name, mic_id, input, phantom, notes, sort) VALUES (?,?,?,?,?,?,?,?)', nid, c.num, c.name, c.mic_id ? micMap[c.mic_id] ?? null : null, c.input, c.phantom, c.notes, c.sort).lastInsertRowid);
+    for (const o of all('SELECT * FROM console_outputs WHERE event_id = ?', ev.id))
+      outMap[o.id] = Number(run('INSERT INTO console_outputs (event_id, name, dest, sort) VALUES (?,?,?,?)', nid, o.name, o.dest, o.sort).lastInsertRowid);
+    for (const r of all('SELECT r.* FROM console_routes r JOIN console_channels c ON c.id = r.channel_id WHERE c.event_id = ?', ev.id))
+      run('INSERT INTO console_routes (channel_id, output_id) VALUES (?,?)', chMap[r.channel_id], outMap[r.output_id]);
     if (body.keep_rundown !== false) {
       for (const b of all('SELECT * FROM blocks WHERE event_id = ?', ev.id)) {
         const br = run('INSERT INTO blocks (event_id, start_time, end_time, title, kind, notes, sort) VALUES (?,?,?,?,?,?,?)', nid, b.start_time, b.end_time, b.title, b.kind, b.notes, b.sort);
@@ -617,6 +658,77 @@ route('POST', '/api/blocks/:id/order', (req, res, body, p, u) => {
   return { ok: true };
 });
 
+// mesa de som — canais (entradas), saídas e matriz
+const chFor = (u, id) => { const c = get('SELECT * FROM console_channels WHERE id = ?', Number(id)); if (!c) throw notFound(); eventFor(u, c.event_id); return c; };
+const outFor = (u, id) => { const o = get('SELECT * FROM console_outputs WHERE id = ?', Number(id)); if (!o) throw notFound(); eventFor(u, o.event_id); return o; };
+const micOf = (evId, id) => (id ? get('SELECT id FROM mics WHERE id = ? AND event_id = ?', Number(id), evId)?.id ?? null : null);
+// o nº do canal na mesa fica também no micro (aparece no cartão do micro e no Ao vivo)
+function syncMicChannel(chId) { const c = get('SELECT mic_id, num FROM console_channels WHERE id = ?', chId); if (c?.mic_id && c.num) run('UPDATE mics SET channel = ? WHERE id = ?', c.num, c.mic_id); }
+const nextSort = (table, evId) => get(`SELECT COALESCE(MAX(sort),0) AS m FROM ${table} WHERE event_id = ?`, evId).m + 1;
+route('POST', '/api/events/:id/channels', (req, res, body, p, u) => {
+  const ev = eventFor(u, p.id);
+  const r = run('INSERT INTO console_channels (event_id, num, name, mic_id, input, phantom, notes, sort) VALUES (?,?,?,?,?,?,?,?)',
+    ev.id, s(body.num, 10), s(body.name, 80), micOf(ev.id, body.mic_id), s(body.input, 40), body.phantom ? 1 : 0, s(body.notes, 300), nextSort('console_channels', ev.id));
+  syncMicChannel(Number(r.lastInsertRowid));
+  broadcast(ev.id); return { id: Number(r.lastInsertRowid) };
+});
+route('PUT', '/api/channels/:id', (req, res, body, p, u) => {
+  const c = chFor(u, p.id);
+  run('UPDATE console_channels SET num=?, name=?, mic_id=?, input=?, phantom=?, notes=? WHERE id=?',
+    s(body.num ?? c.num, 10), s(body.name ?? c.name, 80), body.mic_id === undefined ? c.mic_id : micOf(c.event_id, body.mic_id),
+    s(body.input ?? c.input, 40), body.phantom == null ? c.phantom : (body.phantom ? 1 : 0), s(body.notes ?? c.notes, 300), c.id);
+  syncMicChannel(c.id);
+  broadcast(c.event_id); return { ok: true };
+});
+route('DELETE', '/api/channels/:id', (req, res, b, p, u) => { const c = chFor(u, p.id); run('DELETE FROM console_channels WHERE id = ?', c.id); broadcast(c.event_id); return { ok: true }; });
+route('POST', '/api/events/:id/outputs', (req, res, body, p, u) => {
+  const ev = eventFor(u, p.id);
+  const names = Array.isArray(body.names) ? body.names : [body.name];
+  tx(() => names.forEach((n) => { if (s(n)) run('INSERT INTO console_outputs (event_id, name, dest, sort) VALUES (?,?,?,?)', ev.id, s(n, 40), s(body.dest, 80), nextSort('console_outputs', ev.id)); }));
+  broadcast(ev.id); return { ok: true };
+});
+route('PUT', '/api/outputs/:id', (req, res, body, p, u) => {
+  const o = outFor(u, p.id);
+  run('UPDATE console_outputs SET name=?, dest=? WHERE id=?', s(body.name ?? o.name, 40), s(body.dest ?? o.dest, 80), o.id);
+  broadcast(o.event_id); return { ok: true };
+});
+route('DELETE', '/api/outputs/:id', (req, res, b, p, u) => { const o = outFor(u, p.id); run('DELETE FROM console_outputs WHERE id = ?', o.id); broadcast(o.event_id); return { ok: true }; });
+route('POST', '/api/events/:id/routes', (req, res, body, p, u) => {
+  const ev = eventFor(u, p.id);
+  const c = get('SELECT id FROM console_channels WHERE id = ? AND event_id = ?', Number(body.channel_id), ev.id);
+  const o = get('SELECT id FROM console_outputs WHERE id = ? AND event_id = ?', Number(body.output_id), ev.id);
+  if (!c || !o) throw bad('Canal ou saída inválidos');
+  if (body.on) run('INSERT OR IGNORE INTO console_routes (channel_id, output_id) VALUES (?,?)', c.id, o.id);
+  else run('DELETE FROM console_routes WHERE channel_id = ? AND output_id = ?', c.id, o.id);
+  broadcast(ev.id); return { ok: true };
+});
+// criar um canal por cada micro que ainda não tenha canal
+route('POST', '/api/events/:id/channels/from-mics', (req, res, body, p, u) => {
+  const ev = eventFor(u, p.id);
+  const n = tx(() => {
+    const used = new Set(all('SELECT mic_id FROM console_channels WHERE event_id = ? AND mic_id IS NOT NULL', ev.id).map((r) => r.mic_id));
+    const taken = new Set(all('SELECT num FROM console_channels WHERE event_id = ?', ev.id).map((r) => parseInt(r.num, 10)).filter((x) => x > 0));
+    const mics_ = all('SELECT * FROM mics WHERE event_id = ? ORDER BY sort, id', ev.id).filter((m) => !used.has(m.id));
+    // micros que já têm canal definido reservam esse número primeiro
+    const want = new Map();
+    for (const m of mics_) { const c = parseInt(m.channel, 10); if (c > 0 && !taken.has(c)) { taken.add(c); want.set(m.id, c); } }
+    const nextFree = () => { let n = 1; while (taken.has(n)) n++; taken.add(n); return n; };
+    const outs = all('SELECT id FROM console_outputs WHERE event_id = ?', ev.id);
+    const TN = { mao: 'Mão', lapela: 'Lapela', headset: 'Headset', instrumento: 'Instrumento', pulpito: 'Púlpito', ambiente: 'Ambiente', outro: 'Micro' };
+    let count = 0;
+    for (const m of mics_) {
+      const num = String(want.get(m.id) || nextFree());
+      const name = (m.person ? `${m.label} · ${m.person}` : /^\d+$/.test(m.label) ? `${TN[m.type] || 'Micro'} ${m.label}` : m.label).slice(0, 80);
+      const cid = Number(run('INSERT INTO console_channels (event_id, num, name, mic_id, sort) VALUES (?,?,?,?,?)', ev.id, num, name, m.id, nextSort('console_channels', ev.id)).lastInsertRowid);
+      run('UPDATE mics SET channel = ? WHERE id = ?', num, m.id);
+      if (body.route_first && outs[0]) run('INSERT OR IGNORE INTO console_routes (channel_id, output_id) VALUES (?,?)', cid, outs[0].id);
+      count++;
+    }
+    return count;
+  });
+  broadcast(ev.id); return { created: n };
+});
+
 // live stream
 route('GET', '/api/events/:id/stream', (req, res, b, p, u) => {
   const ev = eventFor(u, p.id);
@@ -640,14 +752,22 @@ route('GET', '/api/admin/stats', (req, res, b, p, u) => {
 // ---------- server ----------
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png', '.json': 'application/json', '.webmanifest': 'application/manifest+json', '.ico': 'image/x-icon' };
 
+const ASSET_VERSION = Date.now().toString(36);
 function serveStatic(req, res, pathname) {
   let file = path.normalize(path.join(PUBLIC_DIR, decodeURIComponent(pathname)));
   if (!file.startsWith(PUBLIC_DIR)) { res.writeHead(403); return res.end(); }
   if (!fs.existsSync(file) || fs.statSync(file).isDirectory()) file = path.join(PUBLIC_DIR, 'index.html');
   const ext = path.extname(file);
+  if (ext === '.html') {
+    // cada arranque do servidor muda a versão dos ficheiros → o browser nunca usa JS/CSS antigos
+    const html = fs.readFileSync(file, 'utf8').replace(/(\/app\.(?:js|css))/g, `$1?v=${ASSET_VERSION}`);
+    res.writeHead(200, { 'Content-Type': MIME[ext], 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' });
+    return res.end(html);
+  }
+  const versioned = new URL(req.url, 'http://x').searchParams.get('v') === ASSET_VERSION;
   res.writeHead(200, {
     'Content-Type': MIME[ext] || 'application/octet-stream',
-    'Cache-Control': ext === '.html' || file.endsWith('sw.js') ? 'no-cache' : 'public, max-age=3600',
+    'Cache-Control': versioned ? 'public, max-age=31536000, immutable' : 'no-cache',
     'X-Content-Type-Options': 'nosniff',
   });
   fs.createReadStream(file).pipe(res);

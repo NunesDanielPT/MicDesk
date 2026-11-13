@@ -149,6 +149,13 @@ async function boot() {
 }
 
 async function render() {
+  try { await renderInner(); } catch (e) {
+    console.error(e);
+    if (!state.me) return;
+    app.innerHTML = shell(`<div class="card empty">Não foi possível carregar.<br><span class="small">${esc(e.message)}</span><br><br><button class="btn primary" onclick="location.reload()">Tentar de novo</button></div>`);
+  }
+}
+async function renderInner() {
   if ($('.modal-bg')) { state.pendingRender = true; return; }
   const parts = parseRoute();
   app.onclick = app.onchange = app.onsubmit = null;
@@ -387,13 +394,14 @@ function micSelect(slot, mics, micById) {
 function renderEvent(tab) {
   const { event, owner } = state.ev;
   const tabs = `<nav class="tabs">
-    ${[['rundown', 'Alinhamento'], ['mics', 'Micros'], ['live', 'Ao vivo'], ['settings', 'Evento']].map(([k, l]) => `<a class="tab ${tab === k ? 'on' : ''}" href="#/e/${event.id}/${k}">${l}</a>`).join('')}
+    ${[['rundown', 'Alinhamento'], ['mics', 'Micros'], ['live', 'Ao vivo'], ['desk', 'Mesa'], ['settings', 'Evento']].map(([k, l]) => `<a class="tab ${tab === k ? 'on' : ''}" href="#/e/${event.id}/${k}">${l}</a>`).join('')}
   </nav>`;
   const crumb = `<span class="livedot ${state.live ? 'on' : ''}" title="Sincronização em tempo real"></span>${esc(event.name)}`;
   let content = '';
   if (tab === 'mics') content = viewMics();
   else if (tab === 'live') content = viewLive();
   else if (tab === 'settings') content = viewSettings();
+  else if (tab === 'desk') content = viewDesk();
   else content = viewRundown();
   const head = tab === 'live' ? '' : `<div class="row" style="justify-content:space-between;flex-wrap:wrap;gap:6px">
       <div style="min-width:0"><h1>${esc(event.name)}</h1><div class="muted small">${esc(fmtDate(event.date))}${event.venue ? ' · ' + esc(event.venue) : ''}${isSuper() && owner ? ' · <span style="color:var(--info)">' + esc(owner.name || owner.email) + '</span>' : ''}</div></div></div>`;
@@ -699,6 +707,85 @@ function viewLive() {
     <div class="live"><div style="display:grid;gap:14px">${curHtml}</div><div style="display:grid;gap:14px">${nextHtml}${laterHtml}</div></div>`;
 }
 
+// ---- mesa de som: matriz de áudio ----
+const DEFAULT_OUTPUTS = ['PA L/R', 'Monitor 1', 'Monitor 2', 'Gravação', 'Streaming'];
+function viewDesk() {
+  const { console: cs, mics, event } = state.ev;
+  const micById = Object.fromEntries(mics.map((m) => [m.id, m]));
+  const on = new Set(cs.routes.map(([c, o]) => `${c}:${o}`));
+  const chs = [...cs.channels].sort((a, b) => (parseInt(a.num, 10) || 9999) - (parseInt(b.num, 10) || 9999) || a.sort - b.sort);
+  const toolbar = `<div class="toolbar noprint">
+    <div class="field" style="margin:0;min-width:200px;flex:1;max-width:320px"><input id="cmodel" value="${esc(event.console_model || '')}" placeholder="Modelo da mesa (ex: Yamaha CL5)"></div>
+    <button class="btn primary" data-addch>+ Canal</button>
+    <button class="btn" data-addout>+ Saída</button>
+    ${mics.length ? '<button class="btn" data-chfrommics>Canais a partir dos micros</button>' : ''}
+    <span class="grow"></span>
+    <button class="btn" onclick="window.print()">Imprimir</button>
+  </div>`;
+  if (!chs.length && !cs.outputs.length) {
+    return toolbar + `<div class="card empty">Ainda não há matriz para este evento.<br><br>
+      1. Cria as <b>saídas</b> da mesa (PA, monitores, gravação…)<br>2. Cria os <b>canais</b> — ou gera-os automaticamente a partir dos micros<br>3. Toca nas células para ligar cada canal às saídas.<br><br>
+      <button class="btn primary" data-baseouts>Criar saídas base (${DEFAULT_OUTPUTS.join(', ')})</button></div>`;
+  }
+  const head = `<tr><th class="sticky">Canal</th>${cs.outputs.map((o) => `<th><button class="outh" data-editout="${o.id}"><b>${esc(o.name)}</b>${o.dest ? `<small>${esc(o.dest)}</small>` : ''}</button></th>`).join('')}
+    <th><button class="outh add" data-addout>+ saída</button></th></tr>`;
+  const numCount = {}; chs.forEach((c) => { if (c.num) numCount[c.num] = (numCount[c.num] || 0) + 1; });
+  const rows = chs.map((c) => {
+    const m = micById[c.mic_id];
+    const dupNum = numCount[c.num] > 1;
+    return `<tr><td class="sticky"><button class="chh" data-editch="${c.id}">
+        <span class="chnum" ${dupNum ? 'style="color:var(--danger)" title="Número de canal repetido"' : ''}>${esc(c.num || '—')}</span>
+        <span class="chname"><b>${esc(c.name || (m ? m.label : 'Canal'))}</b>
+          <small>${[m ? `${TYPES[m.type]} ${esc(m.label)}` : '', c.input ? esc(c.input) : '', c.phantom ? '<span style="color:var(--warn)">48V</span>' : ''].filter(Boolean).join(' · ')}</small></span>
+        ${m ? `<span class="chdot" style="background:${esc(m.color)}"></span>` : ''}
+      </button></td>
+      ${cs.outputs.map((o) => { const k = `${c.id}:${o.id}`; return `<td class="mx"><button class="cell ${on.has(k) ? 'on' : ''}" data-route="${k}" aria-label="${esc(c.name)} → ${esc(o.name)}"></button></td>`; }).join('')}<td></td></tr>`;
+  }).join('');
+  const totals = `<tr class="tot"><td class="sticky small muted">${chs.length} canais</td>${cs.outputs.map((o) => `<td class="small muted" style="text-align:center">${cs.routes.filter(([, oid]) => oid === o.id).length}</td>`).join('')}<td></td></tr>`;
+  const print = `<div class="printonly"><h2>${esc(event.name)} — Matriz da mesa${event.console_model ? ' (' + esc(event.console_model) + ')' : ''}</h2>
+    <table class="ptable"><tr><th>Canal</th><th>Nome</th><th>Micro</th><th>Entrada</th><th>48V</th>${cs.outputs.map((o) => `<th>${esc(o.name)}</th>`).join('')}</tr>
+    ${chs.map((c) => { const m = micById[c.mic_id]; return `<tr><td>${esc(c.num)}</td><td>${esc(c.name)}</td><td class="m" style="background:${m ? esc(m.color) : '#fff'}">${m ? esc(m.label) : ''}</td><td>${esc(c.input)}</td><td>${c.phantom ? '●' : ''}</td>${cs.outputs.map((o) => `<td>${on.has(`${c.id}:${o.id}`) ? '●' : ''}</td>`).join('')}</tr>`; }).join('')}
+    </table></div>`;
+  return toolbar + `<div class="screenonly">
+    ${!chs.length ? '<div class="card small muted" style="margin-bottom:10px">Sem canais. Usa <b>+ Canal</b> ou <b>Canais a partir dos micros</b>.</div>' : ''}
+    <div class="card matrixwrap"><table class="matrix">${head}${rows}${chs.length ? totals : ''}</table></div>
+    <p class="small muted">Toca numa célula para ligar / desligar o canal nessa saída. Toca no nome do canal ou da saída para editar. Tudo sincroniza em tempo real.</p>
+  </div>` + print;
+}
+
+function channelModal(c) {
+  const isNew = !c.id;
+  const { mics, console: cs } = state.ev;
+  const nextNum = Math.max(0, ...cs.channels.map((x) => parseInt(x.num, 10) || 0)) + 1;
+  const f = modal(isNew ? 'Novo canal' : `Canal ${c.num}`, `
+    <div class="grid2"><div class="field"><label>Nº do canal</label><input name="num" value="${esc(c.num ?? String(nextNum))}" inputmode="numeric" required></div>
+    <div class="field"><label>Nome (como na mesa)</label><input name="name" value="${esc(c.name || '')}" placeholder="Ex: Ana Head, Púlpito, Vídeo L"></div></div>
+    <div class="field"><label>Micro ligado (opcional)</label><select name="mic_id"><option value="">— nenhum (fonte de linha, vídeo, PC…) —</option>${mics.map((m) => `<option value="${m.id}" ${m.id === c.mic_id ? 'selected' : ''}>${esc(m.label)} · ${TYPES[m.type]}${m.person ? ' · ' + esc(m.person) : ''}</option>`).join('')}</select></div>
+    <div class="grid2"><div class="field"><label>Entrada física / Stagebox</label><input name="input" value="${esc(c.input || '')}" placeholder="Ex: SB1-05, Local 3, Dante 12"></div>
+    <div class="field"><label>Notas</label><input name="notes" value="${esc(c.notes || '')}" placeholder="Ex: gate, HPF 100Hz"></div></div>
+    <label class="row" style="color:var(--text)"><input type="checkbox" name="phantom" ${c.phantom ? 'checked' : ''} style="width:auto;min-height:0"> Phantom 48V</label>`, {
+    submitLabel: isNew ? 'Adicionar' : 'Guardar',
+    extraFooter: isNew ? '' : '<button type="button" class="btn danger" id="delch">Apagar</button>',
+    onSubmit: async (d) => {
+      if (!d.name) { const m = mics.find((x) => x.id === Number(d.mic_id)); d.name = m ? (m.person ? `${m.label} · ${m.person}` : /^\d+$/.test(m.label) ? `${TYPES[m.type]} ${m.label}` : m.label) : `Canal ${d.num}`; }
+      if (isNew) await api('POST', `/api/events/${state.evId}/channels`, d); else await api('PUT', `/api/channels/${c.id}`, d);
+      scheduleReload();
+    },
+  });
+  $('#delch', f)?.addEventListener('click', async () => { closeModal(); await act(() => api('DELETE', `/api/channels/${c.id}`), 'Canal apagado'); scheduleReload(); });
+}
+function outputModal(o) {
+  const isNew = !o.id;
+  const f = modal(isNew ? 'Nova saída' : `Saída ${o.name}`, `
+    <div class="field"><label>Nome</label><input name="name" value="${esc(o.name || '')}" required placeholder="Ex: PA L/R, Monitor 1, Gravação, Tradução"></div>
+    <div class="field"><label>Destino / ligação (opcional)</label><input name="dest" value="${esc(o.dest || '')}" placeholder="Ex: Mix 1 → Omni 1, Matrix 3, IEM 2"></div>`, {
+    submitLabel: isNew ? 'Adicionar' : 'Guardar',
+    extraFooter: isNew ? '' : '<button type="button" class="btn danger" id="delout">Apagar</button>',
+    onSubmit: async (d) => { if (isNew) await api('POST', `/api/events/${state.evId}/outputs`, d); else await api('PUT', `/api/outputs/${o.id}`, d); scheduleReload(); },
+  });
+  $('#delout', f)?.addEventListener('click', async () => { closeModal(); await act(() => api('DELETE', `/api/outputs/${o.id}`), 'Saída apagada'); scheduleReload(); });
+}
+
 // ---- definições do evento ----
 function viewSettings() {
   const { event } = state.ev;
@@ -764,6 +851,24 @@ function bindEvent(tab) {
       if (v === '1' && a.currentIdx >= 0) for (const sl of bl[a.currentIdx].slots) if (!sl.done) api('PUT', `/api/slots/${sl.id}`, { done: true }).catch(() => { });
       await act(() => api('PUT', `/api/events/${state.evId}`, { current_block_id: bl[i].id })); return scheduleReload();
     }
+    if (t('[data-addch]')) return channelModal({});
+    if ((el = t('[data-editch]'))) return channelModal(state.ev.console.channels.find((c) => c.id === Number(el.dataset.editch)));
+    if (t('[data-addout]')) return outputModal({});
+    if ((el = t('[data-editout]'))) return outputModal(state.ev.console.outputs.find((o) => o.id === Number(el.dataset.editout)));
+    if (t('[data-baseouts]')) { await act(() => api('POST', `/api/events/${state.evId}/outputs`, { names: DEFAULT_OUTPUTS }), 'Saídas criadas'); return scheduleReload(); }
+    if (t('[data-chfrommics]')) {
+      const r = await act(() => api('POST', `/api/events/${state.evId}/channels/from-mics`, { route_first: true }));
+      toast(r.created ? `${r.created} canais criados a partir dos micros` : 'Todos os micros já têm canal'); return scheduleReload();
+    }
+    if ((el = t('[data-route]'))) {
+      const [c, o] = el.dataset.route.split(':').map(Number);
+      const onNow = !el.classList.contains('on');
+      el.classList.toggle('on', onNow);
+      const rt = state.ev.console.routes;
+      if (onNow) rt.push([c, o]); else state.ev.console.routes = rt.filter(([x, y]) => !(x === c && y === o));
+      await act(() => api('POST', `/api/events/${state.evId}/routes`, { channel_id: c, output_id: o, on: onNow })).catch(() => el.classList.toggle('on', !onNow));
+      return;
+    }
     if (t('[data-addmic]')) return micModal({});
     if ((el = t('[data-editmic]'))) return micModal(state.ev.mics.find((m) => m.id === Number(el.dataset.editmic)));
     if ((el = t('[data-batt]'))) {
@@ -806,6 +911,7 @@ function bindEvent(tab) {
     }
   };
   root.onchange = async (e) => {
+    if (e.target.id === 'cmodel') { await act(() => api('PUT', `/api/events/${state.evId}`, { console_model: e.target.value }), 'Modelo da mesa guardado'); return; }
     const sel = e.target.closest('[data-slotmic]');
     if (sel) {
       const m = state.ev.mics.find((x) => x.id === Number(sel.value));

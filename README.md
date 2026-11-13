@@ -16,6 +16,12 @@ App web (iPad, telemóvel e PC) para gerir microfones, pilhas e o alinhamento de
   - **Automático**: o bloco seguinte passa para o ar sozinho à hora marcada.
   - **Manual**: o bloco só muda quando alguém carrega em **● Pôr no ar**.
   Em qualquer um dos modos podes pôr um bloco no ar ou tirá-lo à mão.
+- **Mesa (matriz de áudio)**: guarda o modelo da mesa, os canais e as saídas, e a matriz que diz que canal vai para que saída.
+  - Cada canal tem número, nome, micro ligado, entrada física ou stagebox e 48V.
+  - As saídas são, por exemplo, PA, monitores, gravação e streaming.
+  - Para ligar ou desligar um canal numa saída, toca na célula.
+  - "Canais a partir dos micros" cria um canal por micro, já ligado à PA.
+  - A matriz também se imprime.
 - **Ao vivo** (para o iPad na régie ou no palco): relógio, quem está em palco, o que vem a seguir e o que é preciso recolher a quem. Os botões Anterior/Próximo funcionam em todos os ecrãs ao mesmo tempo.
 - **Utilizadores**: só o super admin (tu) cria utilizadores (os teus colegas). Cada utilizador só vê e gere os seus próprios eventos; o super admin vê os eventos de todos e pode filtrar por utilizador.
 - **Limite de eventos**: cada utilizador pode ter até **5 eventos** (o super admin muda o limite por utilizador; 0 = sem limite). Ao chegar ao limite aparece um aviso com a lista dos eventos, passados primeiro, para apagar.

@@ -239,3 +239,29 @@ h3 { font-size: 16px; margin: 0; }
 
 details.more { border-top: 1px solid var(--line); padding-top: 10px; }
 details.more summary { cursor: pointer; color: var(--muted); font-size: 14px; padding: 6px 0; }
+
+/* matriz da mesa */
+.matrixwrap { padding: 0; overflow: auto; max-height: calc(100dvh - 260px); }
+.matrix { border-collapse: separate; border-spacing: 0; min-width: 100%; }
+.matrix th, .matrix td { border-bottom: 1px solid var(--line); border-right: 1px solid var(--line); padding: 0; background: var(--panel); }
+.matrix th { position: sticky; top: 0; z-index: 2; background: var(--panel2); vertical-align: bottom; }
+.matrix .sticky { position: sticky; left: 0; z-index: 1; background: var(--panel2); min-width: 210px; max-width: 260px; }
+.matrix th.sticky { z-index: 3; text-align: left; padding: 10px 12px; font-size: 13px; color: var(--muted); }
+.matrix tr:last-child td { border-bottom: 0; }
+.outh { border: 0; background: none; color: var(--text); cursor: pointer; padding: 10px 8px; min-width: 84px; width: 100%; display: flex; flex-direction: column; align-items: center; gap: 2px; font-size: 13px; }
+.outh small { color: var(--muted); font-size: 11px; font-weight: 400; }
+.outh.add { color: var(--muted); }
+.chh { border: 0; background: none; color: var(--text); cursor: pointer; width: 100%; display: flex; align-items: center; gap: 10px; padding: 8px 12px; text-align: left; min-height: 52px; }
+.chnum { font-variant-numeric: tabular-nums; font-weight: 800; font-size: 20px; min-width: 32px; text-align: right; }
+.chname { flex: 1; min-width: 0; }
+.chname b { display: block; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.chname small { display: block; color: var(--muted); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.chdot { width: 10px; height: 10px; border-radius: 50%; flex: none; }
+.mx { text-align: center; }
+.cell { width: 100%; min-width: 84px; height: 52px; border: 0; background: transparent; cursor: pointer; position: relative; }
+.cell::after { content: ''; position: absolute; left: 50%; top: 50%; width: 14px; height: 14px; margin: -7px 0 0 -7px; border-radius: 50%; border: 2px solid var(--line); }
+.cell:hover { background: #1c1f23; }
+.cell.on { background: rgba(52,195,143,.14); }
+.cell.on::after { background: var(--accent); border-color: var(--accent); box-shadow: 0 0 10px rgba(52,195,143,.6); width: 18px; height: 18px; margin: -9px 0 0 -9px; }
+.matrix tr.tot td { padding: 8px; background: var(--panel2); }
+@media (max-width: 560px) { .matrix .sticky { min-width: 150px; max-width: 170px; } .chnum { font-size: 17px; min-width: 24px; } .cell, .outh { min-width: 64px; } }
