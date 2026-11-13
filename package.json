@@ -1,0 +1,9 @@
+{
+  "name": "micdesk",
+  "version": "1.0.0",
+  "description": "Gestão de microfones, pilhas e alinhamento para eventos",
+  "main": "server.js",
+  "private": true,
+  "engines": { "node": ">=22.13" },
+  "scripts": { "start": "node --no-warnings server.js" }
+}

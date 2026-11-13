@@ -1,0 +1,17 @@
+services:
+  micdesk:
+    build: .
+    image: micdesk:latest
+    container_name: micdesk
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      ADMIN_EMAIL: "admin@exemplo.pt"       # email do super admin (só usado no 1º arranque)
+      ADMIN_PASSWORD: "MudaEstaPassword123" # password do super admin (só no 1º arranque)
+      COOKIE_SECURE: "false"                # pôr "true" quando estiver atrás de HTTPS
+      TZ: "Europe/Lisbon"
+    volumes:
+      - micdesk_data:/data
+volumes:
+  micdesk_data:

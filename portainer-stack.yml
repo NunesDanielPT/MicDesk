@@ -1,0 +1,18 @@
+# Usar no Portainer > Stacks > Add stack > Web editor
+# (a imagem micdesk:latest tem de ser construída antes — ver LEIA-ME.md, passo 2)
+services:
+  micdesk:
+    image: micdesk:latest
+    container_name: micdesk
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      ADMIN_EMAIL: "admin@exemplo.pt"
+      ADMIN_PASSWORD: "MudaEstaPassword123"
+      COOKIE_SECURE: "false"
+      TZ: "Europe/Lisbon"
+    volumes:
+      - micdesk_data:/data
+volumes:
+  micdesk_data:
