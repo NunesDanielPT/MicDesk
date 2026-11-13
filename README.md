@@ -22,7 +22,12 @@ App web (iPad, telemóvel e PC) para gerir microfones, pilhas e o alinhamento de
   - Para ligar ou desligar um canal numa saída, toca na célula.
   - "Canais a partir dos micros" cria um canal por micro, já ligado à PA.
   - A matriz também se imprime.
-- **Ao vivo** (para o iPad na régie ou no palco): relógio, quem está em palco, o que vem a seguir e o que é preciso recolher a quem. Os botões Anterior/Próximo funcionam em todos os ecrãs ao mesmo tempo.
+- **Ao vivo** (grelha para o iPad na régie ou no palco): as linhas são os micros e as colunas são os 2 blocos anteriores, o bloco ON AIR (a vermelho) e os seguintes.
+  - Cada célula diz quem tem aquele micro naquele bloco.
+  - **↺ de X** indica que o micro muda de pessoa; **recolher de X** indica que é preciso tirá-lo a quem está no ar agora.
+  - No topo aparecem o relógio, o bloco no ar, o seguinte, o número de trocas e as pilhas fracas.
+- **Grelha de micros no Alinhamento**: mostra o evento inteiro de uma vez. Para dar um micro a alguém nesse bloco, toca numa célula vazia.
+  - Ao escolher o micro para um orador, cada opção diz se o micro está livre ou quem o teve nos 2 blocos anteriores.
 - **Utilizadores**: só o super admin (tu) cria utilizadores (os teus colegas). Cada utilizador só vê e gere os seus próprios eventos; o super admin vê os eventos de todos e pode filtrar por utilizador.
 - **Limite de eventos**: cada utilizador pode ter até **5 eventos** (o super admin muda o limite por utilizador; 0 = sem limite). Ao chegar ao limite aparece um aviso com a lista dos eventos, passados primeiro, para apagar.
 - **Criar evento**: só o nome é obrigatório; data, local, modo ON AIR e micros base estão em *Mais opções*.

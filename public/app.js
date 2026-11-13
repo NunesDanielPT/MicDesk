@@ -129,7 +129,8 @@ function confirmBox(title, text, label = 'Apagar') {
 }
 
 // ---------- state & routing ----------
-const state = { me: null, types: [], colors: [], ev: null, evId: null, es: null, live: false, pendingRender: false, filterType: 'all', showArchived: false };
+let savedRview = 'list'; try { savedRview = localStorage.getItem('md_rview') || 'list'; } catch { }
+const state = { rview: savedRview, me: null, types: [], colors: [], ev: null, evId: null, es: null, live: false, pendingRender: false, filterType: 'all', showArchived: false };
 
 function go(hash) { if (location.hash !== hash) location.hash = hash; else render(); }
 window.addEventListener('hashchange', () => { $('.modal-bg')?.remove(); state.pendingRender = false; render(); });
@@ -419,9 +420,16 @@ function viewRundown() {
     <button class="btn" data-addblock="intervalo">+ Intervalo</button>
     <button class="btn" data-import>Importar da folha</button>` : ''}
     <span class="grow"></span>
+    ${blocks.length ? `<div class="seg"><button data-rview="list" class="${state.rview !== 'grid' ? 'on' : ''}">☰ Lista</button><button data-rview="grid" class="${state.rview === 'grid' ? 'on' : ''}">▦ Grelha de micros</button></div>` : ''}
     <a class="pill" href="#/e/${state.evId}/settings" title="Mudar em Evento">Modo ON AIR: ${AIR_MODES[state.ev.event.air_mode] || ''}</a>
     <button class="btn" onclick="window.print()">Imprimir</button>
   </div>`;
+  if (blocks.length && state.rview === 'grid') {
+    return toolbar + `<div class="screenonly">
+      <div class="card gridwrap">${micGrid(blocks, { airId: a.currentId, editable: w })}</div>
+      <p class="small muted">Linhas = micros, colunas = blocos. Toca numa célula vazia para dar esse micro a alguém nesse bloco; toca num nome para editar. <span class="lg-swap">↺ troca</span> = o micro muda de pessoa e tem de ser recolhido; <span class="lg-cont">→ continua</span> = a mesma pessoa fica com ele.</p>
+    </div>`;
+  }
   if (!blocks.length) return toolbar + `<div class="card empty">Ainda não há alinhamento.<br><br>Cria blocos (cada bloco = uma hora com um ou mais oradores, como um painel) ou <b>importa</b> diretamente da tua folha Excel/Google Sheets.</div>`;
 
   const blockHtml = (b, i) => {
@@ -463,7 +471,7 @@ function viewRundown() {
       ${slots}
       ${w ? `<form class="addslot" data-addslot="${b.id}">
         <input name="speaker" placeholder="+ Adicionar orador" autocomplete="off">
-        <select name="mic_id"><option value="">Micro</option>${mics.map((x) => `<option value="${x.id}">${esc(x.label)}</option>`).join('')}</select>
+        <select name="mic_id"><option value="">Micro</option>${micOptionsFor(b)}</select>
         <button class="btn sm primary" style="min-height:40px">+</button>
       </form>` : ''}
     </div>`;
@@ -646,65 +654,117 @@ function micModal(m) {
   }).catch(() => { });
 }
 
-// ---- ao vivo ----
+// ---- ocupação dos micros por bloco ----
+function occupancy() {
+  const { blocks } = state.ev;
+  const occ = {}; // blockId -> micId -> [slots]
+  const prevHolder = {}; // blockId -> micId -> {speaker, block}  (quem tinha o micro no bloco anterior em que foi usado)
+  const last = {}; // micId -> {speaker, block}
+  const free = []; // blockId -> slots sem micro
+  for (const b of blocks) {
+    occ[b.id] = {}; prevHolder[b.id] = { ...last }; free[b.id] = [];
+    if (b.kind === 'intervalo') continue;
+    for (const sl of b.slots) { if (sl.mic_id) (occ[b.id][sl.mic_id] ||= []).push(sl); else free[b.id].push(sl); }
+    for (const sl of b.slots) if (sl.mic_id) last[sl.mic_id] = { speaker: sl.speaker, block: b };
+  }
+  return { occ, prevHolder, free };
+}
+const sameName = (a, b) => String(a || '').trim().toLowerCase() === String(b || '').trim().toLowerCase();
+const shortName = (n) => { const p = String(n || '').trim().split(/\s+/); return p.length > 2 ? `${p[0]} ${p[p.length - 1]}` : p.join(' '); };
+
+// opções do micro ao adicionar um orador: mostra quem o tem nos 2 blocos anteriores
+function micOptionsFor(block) {
+  const { mics, blocks } = state.ev;
+  const { occ } = occupancy();
+  const idx = blocks.findIndex((b) => b.id === block.id);
+  const prev = blocks.slice(0, idx).filter((b) => b.kind !== 'intervalo').slice(-2).reverse();
+  return mics.map((m) => {
+    const here = occ[block.id]?.[m.id];
+    let note = 'livre';
+    if (here && !['pulpito', 'ambiente'].includes(m.type)) note = `⚠ já neste bloco: ${shortName(here[0].speaker)}`;
+    else {
+      for (const pb of prev) { const h = occ[pb.id]?.[m.id]; if (h) { note = `${shortName(h[0].speaker)} (${pb.start_time || '?'})`; break; } }
+    }
+    return `<option value="${m.id}">${esc(m.label)} — ${esc(note)}</option>`;
+  }).join('');
+}
+
+// grelha micros × blocos (usada no Ao vivo e no Alinhamento)
+function micGrid(cols, { airId, editable, live } = {}) {
+  const { mics, blocks } = state.ev;
+  const { occ, prevHolder, free } = occupancy();
+  const airIdx = blocks.findIndex((b) => b.id === airId);
+  const used = new Set(); cols.forEach((b) => Object.keys(occ[b.id] || {}).forEach((k) => used.add(Number(k))));
+  const rows = live ? mics.filter((m) => used.has(m.id)) : mics;
+  const hasFree = cols.some((b) => free[b.id]?.length);
+  const tag = (b) => {
+    if (!live) return b.id === airId ? '<span class="onair">ON AIR</span>' : '';
+    const i = blocks.indexOf(b) - airIdx;
+    if (airIdx < 0) return i === -airIdx ? '' : '';
+    return i < 0 ? '<span class="gtag">ANTES</span>' : i === 0 ? '<span class="onair">ON AIR</span>' : i === 1 ? '<span class="gtag next">A SEGUIR</span>' : '<span class="gtag">DEPOIS</span>';
+  };
+  const head = `<tr><th class="sticky gcorner">Micro</th>${cols.map((b) => b.kind === 'intervalo'
+    ? `<th class="gbreak"><div class="gh"><b class="gtime">${esc(b.start_time || '')}</b><small>☕</small></div></th>`
+    : `<th class="${b.id === airId ? 'gair' : ''}"><button class="gh" ${editable ? `data-editblock="${b.id}"` : ''}>${tag(b)}<b class="gtime">${esc(b.start_time || '--:--')}</b><small>${esc(b.title || (b.slots.length > 1 ? `Painel · ${b.slots.length}` : ''))}</small></button></th>`).join('')}</tr>`;
+  const cell = (b, m) => {
+    if (b.kind === 'intervalo') return '<td class="gbreak"></td>';
+    const air = b.id === airId ? ' gair' : '';
+    const here = occ[b.id]?.[m.id];
+    if (!here) return `<td class="gfree${air}">${editable ? `<button class="gc add" data-gridadd="${b.id}:${m.id}" aria-label="Dar micro ${esc(m.label)}">+</button>` : ''}</td>`;
+    const ph = prevHolder[b.id]?.[m.id];
+    const shared = ['pulpito', 'ambiente'].includes(m.type);
+    const dup = here.length > 1 && !shared;
+    const swap = !shared && ph && !sameName(ph.speaker, here[0].speaker);
+    const cont = ph && !swap && blocks.indexOf(ph.block) === blocks.indexOf(b) - 1;
+    const fromAir = live && swap && ph.block.id === airId;
+    let sub = '';
+    if (dup) sub = '<span class="gs bad">⚠ repetido</span>';
+    else if (swap) sub = `<span class="gs ${fromAir ? 'warn' : 'swap'}">${fromAir ? 'recolher de' : '↺ de'} ${esc(shortName(ph.speaker))}</span>`;
+    else if (cont) sub = '<span class="gs cont">→ continua</span>';
+    const names = here.map((sl) => `<span class="gn ${sl.done ? 'done' : ''}">${esc(sl.speaker)}</span>`).join('');
+    const act = b.id === airId && live ? `data-done="${here[0].id}"` : editable ? `data-editslot="${here[0].id}"` : '';
+    return `<td class="gused${air}${swap ? ' gswap' : ''}${dup ? ' gdup' : ''}"><button class="gc ${live && b.id === airId && here[0].done ? 'on' : ''}" ${act} style="--mc:${esc(m.color)}">${names}${sub}</button></td>`;
+  };
+  const body = rows.map((m) => `<tr><td class="sticky"><div class="gm">${chip(m)}<div class="gmi"><b>${esc(m.person || TYPES[m.type])}</b><small>${m.person ? TYPES[m.type] : ''}${m.channel ? `${m.person ? ' · ' : ''}canal ${esc(m.channel)}` : ''}</small></div>${batt(m.battery)}</div></td>${cols.map((b) => cell(b, m)).join('')}</tr>`).join('');
+  const freeRow = hasFree ? `<tr><td class="sticky"><div class="gm"><span class="chip none">—</span><div class="gmi"><b>Sem micro</b></div></div></td>${cols.map((b) => b.kind === 'intervalo' ? '<td class="gbreak"></td>'
+    : `<td class="${b.id === airId ? 'gair' : ''}">${(free[b.id] || []).map((sl) => `<button class="gc nomic" ${editable ? `data-editslot="${sl.id}"` : ''}><span class="gn">${esc(sl.speaker)}</span><span class="gs bad">sem micro</span></button>`).join('')}</td>`).join('')}</tr>` : '';
+  return `<table class="mgrid ${live ? 'live' : ''}">${head}${body}${freeRow}</table>`;
+}
+
+// ---- ao vivo: grelha ----
 function viewLive() {
-  const { blocks, event } = state.ev;
+  const { blocks, event, mics } = state.ev;
   const a = analyze();
   const w = canWrite();
-  const talk = blocks;
-  const cur = talk[a.currentIdx];
-  let nextIdx = a.currentIdx + 1;
-  while (talk[nextIdx] && talk[nextIdx].kind === 'intervalo' && talk[nextIdx + 1]) nextIdx++;
-  const next = a.currentIdx >= 0 ? talk[nextIdx] : talk.find((b) => b.kind !== 'intervalo');
-  const after = talk.slice(nextIdx + 1).filter((b) => b.kind !== 'intervalo').slice(0, 3);
-
-  const slotLive = (sl) => {
-    const m = a.micById[sl.mic_id];
-    return `<div class="liveslot ${sl.done ? 'done' : ''}">
-      ${chip(m, 'xl')}
-      <div class="who">${esc(sl.speaker)}<small>${m ? `${TYPES[m.type]}${m.channel ? ' · canal ' + esc(m.channel) : ''}` : 'sem micro'}${sl.role ? ' · ' + esc(sl.role) : ''}</small></div>
-      ${m ? batt(m.battery) : ''}
-      <button class="check ${sl.done ? 'on' : ''}" data-done="${sl.id}" ${w ? '' : 'disabled'} style="width:44px;height:44px" aria-label="Feito">✓</button>
-    </div>`;
-  };
-  const airHead = (b) => `<div class="airhead"><span class="onair lg">ON AIR</span><span class="bigtime">${esc(b.start_time || '--:--')}${b.end_time ? `<small> – ${esc(b.end_time)}</small>` : ''}</span></div>`;
-  const curHtml = cur
-    ? (cur.kind === 'intervalo'
-      ? `<div class="card aircard">${airHead(cur)}<h1>☕ ${esc(cur.title || 'Intervalo')}</h1></div>`
-      : `<div class="card aircard">${airHead(cur)}
-        ${cur.title ? `<h2>${esc(cur.title)}</h2>` : ''}${cur.notes ? `<p class="muted">${esc(cur.notes)}</p>` : ''}
-        ${cur.slots.map(slotLive).join('') || '<p class="muted">Sem oradores</p>'}</div>`)
-    : `<div class="card empty">${blocks.length ? 'Nada no ar.<br><br>' + (w ? 'Carrega em <b>● Pôr no ar</b> para colocar o primeiro bloco no ar.' : '') : 'Sem alinhamento.'}</div>`;
-
-  const nextHtml = next ? `<div class="card">
-      <div class="label-up">A seguir</div><div class="bigtime" style="margin-bottom:8px">${esc(next.start_time || '--:--')}</div>
-      ${next.kind === 'intervalo' ? `<h2>☕ ${esc(next.title || 'Intervalo')}</h2>` : `
-      ${next.title ? `<h3 style="margin-bottom:8px">${esc(next.title)}</h3>` : ''}
-      ${next.slots.map((sl) => {
-    const m = a.micById[sl.mic_id];
-    const inf = a.slotInfo[sl.id] || {};
-    const fromCur = inf.from && cur && inf.from.block.id === cur.id;
-    let prep = '';
-    if (!m) prep = '<span class="pill danger">sem micro</span>';
-    else if (inf.dup) prep = '<span class="pill danger">micro repetido</span>';
-    else if (inf.from) prep = `<span class="pill ${fromCur ? 'warn' : 'info'}">recolher de ${esc(inf.from.speaker)}</span>`;
-    else prep = '<span class="pill ok">livre</span>';
-    const bw = m && m.battery <= 1 ? `<span class="pill ${m.battery ? 'warn' : 'danger'}">pilhas ${BATT_LABEL[m.battery].toLowerCase()}</span>` : '';
-    return `<div class="handover">${chip(m, 'lg')}<div class="grow"><b>${esc(sl.speaker)}</b><div class="pills" style="margin-top:4px">${prep}${bw}</div></div>${m ? batt(m.battery) : ''}</div>`;
-  }).join('')}`}
-    </div>` : '<div class="card muted">Fim do alinhamento.</div>';
-
-  const laterHtml = after.length ? `<div class="card"><div class="label-up">Depois</div>${after.map((b) => `<div class="handover"><b style="min-width:52px">${esc(b.start_time)}</b><span class="grow">${b.slots.map((sl) => `${esc(sl.speaker)} ${a.micById[sl.mic_id] ? chip(a.micById[sl.mic_id]) : ''}`).join(' &nbsp; ')}</span></div>`).join('')}</div>` : '';
-
-  return `<div class="livehead" style="margin:6px 0 14px">
+  const cur = blocks[a.currentIdx];
+  // janela: 2 blocos antes, ON AIR, e os seguintes (até 6 colunas de oradores)
+  const center = a.currentIdx >= 0 ? a.currentIdx : Math.max(0, a.dueIdx);
+  const talkIdx = blocks.map((b, i) => (b.kind !== 'intervalo' ? i : -1)).filter((i) => i >= 0);
+  const before = talkIdx.filter((i) => i < center).slice(-2);
+  const start = before.length ? before[0] : center;
+  let cols = []; let talks = 0;
+  for (let i = start; i < blocks.length && talks < 6; i++) { cols.push(blocks[i]); if (blocks[i].kind !== 'intervalo') talks++; }
+  const next = blocks.slice(a.currentIdx + 1).find((b) => b.kind !== 'intervalo');
+  const lowNext = next ? next.slots.map((sl) => mics.find((m) => m.id === sl.mic_id)).filter((m) => m && m.battery <= 1) : [];
+  const { occ, prevHolder } = occupancy();
+  const swaps = next ? next.slots.filter((sl) => { const ph = prevHolder[next.id]?.[sl.mic_id]; const m = mics.find((x) => x.id === sl.mic_id); return sl.mic_id && ph && !sameName(ph.speaker, sl.speaker) && !['pulpito', 'ambiente'].includes(m?.type); }).length : 0;
+  return `<div class="livebar">
       <div><div class="clock" id="clock">${nowHM()}</div><div class="muted small">${esc(event.name)} · modo ${AIR_MODES[event.air_mode]}</div></div>
-      ${w ? `<div class="livenav" style="min-width:min(100%,460px)">
-        <button class="btn" data-livenav="-1">◀ Anterior</button>
+      <div class="livesum">
+        ${cur ? `<div><span class="label-up" style="color:var(--air)">No ar</span><b class="bigtime sm">${esc(cur.start_time || '--:--')}</b></div>` : '<div><span class="label-up">No ar</span><b class="muted">—</b></div>'}
+        ${next ? `<div><span class="label-up">A seguir</span><b class="bigtime sm">${esc(next.start_time || '--:--')}</b></div>` : ''}
+        ${next ? `<div><span class="label-up">Trocas</span><b class="bigtime sm" style="color:${swaps ? 'var(--warn)' : 'var(--accent)'}">${swaps}</b></div>` : ''}
+        ${lowNext.length ? `<div><span class="label-up">Pilhas</span><b class="bigtime sm" style="color:var(--danger)">⚠ ${lowNext.map((m) => esc(m.label)).join(', ')}</b></div>` : ''}
+      </div>
+      ${w ? `<div class="livenav">
+        <button class="btn" data-livenav="-1">◀</button>
         <button class="btn airbtn" data-livenav="1">● ${cur ? 'Próximo no ar' : 'Pôr no ar'} ▶</button>
         ${cur ? '<button class="btn" data-livenav="off" title="Tirar do ar">■</button>' : ''}
       </div>` : ''}
     </div>
-    <div class="live"><div style="display:grid;gap:14px">${curHtml}</div><div style="display:grid;gap:14px">${nextHtml}${laterHtml}</div></div>`;
+    ${blocks.length ? `<div class="card gridwrap live">${micGrid(cols, { airId: a.currentId, live: true })}</div>
+    <p class="small muted">Mostra os 2 blocos anteriores, o que está ON AIR e os seguintes. <span class="lg-warn">recolher de</span> = tirar o micro a quem está no ar agora para dar ao próximo. Toca num nome na coluna ON AIR para marcar como ✓ feito.</p>`
+    : '<div class="card empty">Sem alinhamento.</div>'}`;
 }
 
 // ---- mesa de som: matriz de áudio ----
@@ -833,7 +893,7 @@ function bindEvent(tab) {
     if ((el = t('[data-done]'))) {
       const id = Number(el.dataset.done);
       const on = !el.classList.contains('on');
-      el.classList.toggle('on', on); el.closest('.slot, .liveslot')?.classList.toggle('done', on);
+      el.classList.toggle('on', on); el.closest('.slot, .liveslot')?.classList.toggle('done', on); $$('.gn', el).forEach((x) => x.classList.toggle('done', on));
       await act(() => api('PUT', `/api/slots/${id}`, { done: on })); return scheduleReload();
     }
     if ((el = t('[data-setcur]'))) {
@@ -850,6 +910,20 @@ function bindEvent(tab) {
       // ao avançar marca como feitos os oradores do bloco que termina
       if (v === '1' && a.currentIdx >= 0) for (const sl of bl[a.currentIdx].slots) if (!sl.done) api('PUT', `/api/slots/${sl.id}`, { done: true }).catch(() => { });
       await act(() => api('PUT', `/api/events/${state.evId}`, { current_block_id: bl[i].id })); return scheduleReload();
+    }
+    if ((el = t('[data-rview]'))) { state.rview = el.dataset.rview; try { localStorage.setItem('md_rview', state.rview); } catch { } return renderEvent('rundown'); }
+    if ((el = t('[data-gridadd]'))) {
+      const [bid, mid] = el.dataset.gridadd.split(':').map(Number);
+      const b = state.ev.blocks.find((x) => x.id === bid); const m = state.ev.mics.find((x) => x.id === mid);
+      const ph = occupancy().prevHolder[bid]?.[mid];
+      return modal(`Micro ${m.label} às ${b.start_time || '--:--'}`, `
+        ${ph ? `<p class="small muted" style="margin-top:0">Antes estava com <b>${esc(ph.speaker)}</b> (${esc(ph.block.start_time || '?')}).</p>` : '<p class="small muted" style="margin-top:0">Micro livre até aqui.</p>'}
+        <div class="field"><label>Quem fala com este micro?</label><input name="speaker" required list="speakers-dl" placeholder="Nome do orador"></div>
+        <datalist id="speakers-dl">${[...new Set(state.ev.blocks.flatMap((x) => x.slots.map((sl) => sl.speaker)))].map((n) => `<option value="${esc(n)}">`).join('')}</datalist>
+        <div class="field"><label>Função / Nota (opcional)</label><input name="role" placeholder="Ex: Moderador"></div>`, {
+        submitLabel: 'Adicionar',
+        onSubmit: async (d) => { await api('POST', `/api/blocks/${bid}/slots`, { ...d, mic_id: mid }); scheduleReload(); },
+      });
     }
     if (t('[data-addch]')) return channelModal({});
     if ((el = t('[data-editch]'))) return channelModal(state.ev.console.channels.find((c) => c.id === Number(el.dataset.editch)));
@@ -937,6 +1011,13 @@ function bindEvent(tab) {
     }
   };
   if (state.focusAdd) { $(`[data-addslot="${state.focusAdd}"] input`)?.focus(); state.focusAdd = null; }
+  // grelha: garantir que a coluna ON AIR fica visível (no telemóvel aparece logo a seguir à coluna dos micros)
+  const air = $('.gridwrap th.gair');
+  if (air) {
+    const wrap = air.closest('.gridwrap'); const stickyW = $('.gcorner', wrap)?.offsetWidth || 0;
+    const r = air.getBoundingClientRect(), wr = wrap.getBoundingClientRect();
+    if (r.right > wr.right) wrap.scrollLeft += r.left - (wr.left + stickyW);
+  }
 }
 
 // relógio ao vivo
