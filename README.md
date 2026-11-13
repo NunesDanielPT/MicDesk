@@ -24,9 +24,9 @@ App web (iPad, telemóvel e PC) para gerir microfones, pilhas e o alinhamento de
   - Todos os aparelhos usam o relógio do servidor, por isso mostram o mesmo tempo.
 - **Ecrã e experiência** (menu → 🖥 Ecrã e experiência): a grelha do Ao vivo ajusta-se ao ecrã.
   - Predefinições da app: Automático, PC/régie, iPad, Telemóvel, Palco/letra grande e Visão total.
-  - Também podes ajustar à mão o tamanho dos nomes, o espaçamento e quantos blocos aparecem antes e depois, com pré-visualização ao vivo.
+  - Também podes ajustar à mão o tamanho dos nomes, a **largura dos blocos**, o espaçamento e quantos blocos aparecem antes e depois, com pré-visualização ao vivo.
   - As tuas próprias predefinições ficam guardadas na tua conta, para usares em todos os aparelhos. A escolha ativa é guardada em cada aparelho.
-  - No Ao vivo há atalhos **A− / A+ / ⤢ Ajustar ao ecrã**.
+  - No Ao vivo há atalhos **A− / A+** (tamanho dos nomes), **◂▸ − / ◂ ▸ +** (largura dos blocos) e **⤢ Ajustar ao ecrã**.
 - **Arrastar micros**: na página Micros, usa a pega ⠿ para arrastar um cartão e mudar a ordem. Funciona com rato e com toque.
 - **📚 Catálogo de mesas** (Mesa → Escolher mesa): escolhes a marca, o modelo e a versão, e a matriz é criada com as saídas da mesa (mains, buses e matrizes) e a capacidade de canais. Se usares um canal acima da capacidade, aparece um aviso.
   - Behringer: WING, X32, XR18

@@ -1071,7 +1071,8 @@ function viewLive() {
     ${tipDisplay()}
     <div class="gridtools"><span class="small muted">Ecrã: <b>${esc(vp.label || 'Personalizado')}</b></span><span class="grow"></span>
       <button class="btn sm" data-gz="-1" title="Mais pequeno">A−</button><button class="btn sm" data-gz="1" title="Maior">A+</button>
-      <button class="btn sm ${vp.fit ? 'primary' : ''}" data-gfit title="Ajustar colunas à largura do ecrã">⤢ Ajustar ao ecrã</button>
+      <button class="btn sm" data-gw="-1" title="Blocos mais estreitos">◂▸ −</button><button class="btn sm" data-gw="1" title="Blocos mais largos">◂ ▸ +</button>
+      <button class="btn sm ${vp.fit && !vp.colw ? 'primary' : ''}" data-gfit title="Ajustar colunas à largura do ecrã">⤢ Ajustar ao ecrã</button>
       <a class="btn sm" href="#/display">⚙ Configurar</a></div>
     ${blocks.length ? `<div class="card gridwrap live">${micGrid(cols, { airId: a.currentId, live: true })}</div>
     <p class="small muted">Mostra os 2 blocos anteriores, o que está ON AIR e os seguintes. <span class="lg-warn">recolher de</span> = tirar o micro a quem está no ar agora para dar ao próximo. Toca num nome na coluna ON AIR para marcar como ✓ feito; noutra coluna, para marcar como <b>micado</b>.</p>`
@@ -1377,7 +1378,13 @@ function bindEvent(tab) {
     }
     if (t('[data-stage]')) return openStage();
     if ((el = t('[data-gz]'))) { const v = viewPrefs(); const cur = v.name || Number(getComputedStyle($('.mgrid.live') || document.body).getPropertyValue('--g-name').replace('px', '')) || 17; v.name = Math.max(10, Math.min(36, cur + Number(el.dataset.gz) * 2)); v.label = 'Personalizado'; v.presetId = null; saveView(v); return renderEvent('live'); }
-    if (t('[data-gfit]')) { const v = viewPrefs(); v.fit = !v.fit; v.label = 'Personalizado'; v.presetId = null; saveView(v); return renderEvent('live'); }
+    if ((el = t('[data-gw]'))) {
+      const v = viewPrefs(); const tbl = $('.mgrid.live');
+      const cur = v.colw || Number((tbl && getComputedStyle(tbl).getPropertyValue('--g-colw').replace('px', '')) || 160);
+      v.colw = Math.max(80, Math.min(400, Math.round((cur + Number(el.dataset.gw) * 20) / 10) * 10)); v.label = 'Personalizado'; v.presetId = null; saveView(v);
+      toast(`Largura dos blocos: ${v.colw} px`); return renderEvent('live');
+    }
+    if (t('[data-gfit]')) { const v = viewPrefs(); if (v.colw) { v.colw = 0; v.fit = true; } else v.fit = !v.fit; v.label = 'Personalizado'; v.presetId = null; saveView(v); return renderEvent('live'); }
     if (t('[data-tipok]')) { try { localStorage.setItem('md_tip_display', '1'); } catch { } $('.tipbar')?.remove(); if (!t('a')) return; }
     if ((el = t('[data-miked]'))) {
       const id = Number(el.dataset.miked);
@@ -1556,7 +1563,7 @@ const VIEW_PRESETS = [
 function viewPrefs() {
   let v = null; try { v = JSON.parse(localStorage.getItem('md_view') || 'null'); } catch { }
   if (!v) { const w = window.innerWidth; v = { ...VIEW_PRESETS.find((p) => p.id === (w < 600 ? 'phone' : w < 1200 ? 'ipad' : 'pc')) }; }
-  return { fit: true, name: 0, density: 'normal', before: 2, after: 4, ...v };
+  return { fit: true, name: 0, colw: 0, density: 'normal', before: 2, after: 4, ...v };
 }
 function saveView(v) { try { localStorage.setItem('md_view', JSON.stringify(v)); } catch { } }
 const DENS = { compact: { pad: 6, rowh: 50 }, normal: { pad: 9, rowh: 66 }, comfortable: { pad: 14, rowh: 88 } };
@@ -1573,9 +1580,10 @@ function applyGridPrefs(root = document) {
     const talk = Math.max(1, cols.length - breaks);
     let colW = v.fit ? Math.floor((vw - stickyW - breaks * 46 - 8 - talk * 2) / talk) : 160;
     colW = Math.max(v.fit ? 96 : 110, colW);
+    if (v.colw > 0) colW = v.colw; // largura escolhida à mão
     const name = v.name || Math.round(Math.max(13, Math.min(24, colW / 9)));
     // nomes grandes precisam de colunas largas (senão as palavras partem-se) — aí a grelha desliza
-    colW = Math.max(colW, Math.round(name * 7.2));
+    if (!(v.colw > 0)) colW = Math.max(colW, Math.round(name * 7.2));
     tbl.style.setProperty('--g-colw', colW + 'px');
     tbl.style.setProperty('--g-name', name + 'px');
     tbl.style.setProperty('--g-sub', Math.max(10, Math.round(name * 0.68)) + 'px');
@@ -1638,7 +1646,7 @@ async function renderDisplay() {
   const ups = await loadUserPresets();
   const v = viewPrefs();
   const card = (p, mine) => `<button class="pcard ${v.presetId === (mine ? 'u:' : '') + p.id ? 'on' : ''}" data-preset="${mine ? 'u:' : ''}${esc(p.id)}">
-      <b>${esc(p.label)}</b><small>${esc(p.desc || `${p.fit ? 'ajusta ao ecrã' : 'largura fixa'} · nomes ${p.name || 'auto'} · ${p.before}+${p.after} blocos`)}</small>
+      <b>${esc(p.label)}</b><small>${esc(p.desc || `${p.colw ? 'colunas ' + p.colw + ' px' : p.fit ? 'ajusta ao ecrã' : 'largura fixa'} · nomes ${p.name || 'auto'} · ${p.before}+${p.after} blocos`)}</small>
       ${mine ? `<span class="pdel" data-delpreset="${esc(p.id)}" title="Apagar">✕</span>` : ''}</button>`;
   app.innerHTML = shell(`
     <h1 style="margin-top:14px">🖥 Ecrã e experiência</h1>
@@ -1652,6 +1660,7 @@ async function renderDisplay() {
         <h2>Personalizar</h2>
         <label class="row" style="color:var(--text);margin-bottom:14px"><input type="checkbox" name="fit" ${v.fit ? 'checked' : ''} style="width:auto;min-height:0"> Ajustar as colunas à largura do ecrã</label>
         <div class="field"><label>Tamanho dos nomes: <b id="vname">${v.name ? v.name + ' px' : 'automático'}</b></label><input type="range" name="name" min="0" max="32" step="1" value="${v.name || 0}"><div class="small muted">0 = automático (conforme a largura das colunas)</div></div>
+        <div class="field"><label>Largura dos blocos (colunas): <b id="vcolw">${v.colw ? v.colw + ' px' : 'automática'}</b></label><input type="range" name="colw" min="0" max="360" step="10" value="${v.colw || 0}"><div class="small muted">0 = automática. Mais largo = mais espaço para os nomes (a grelha desliza para o lado); mais estreito = mais blocos à vista.</div></div>
         <div class="field"><label>Espaçamento</label><div class="seg" style="display:flex">${[['compact', 'Compacto'], ['normal', 'Normal'], ['comfortable', 'Largo']].map(([k, l]) => `<button type="button" data-dens="${k}" class="${v.density === k ? 'on' : ''}" style="flex:1">${l}</button>`).join('')}</div></div>
         <div class="grid2"><div class="field"><label>Blocos antes: <b id="vbef">${v.before}</b></label><input type="range" name="before" min="0" max="4" value="${v.before}"></div>
         <div class="field"><label>Blocos depois: <b id="vaft">${v.after}</b></label><input type="range" name="after" min="1" max="12" value="${v.after}"></div></div>
@@ -1663,11 +1672,13 @@ async function renderDisplay() {
   applyGridPrefs();
   const cur = () => {
     const f = $('#vform'); const d = $('[data-dens].on', f)?.dataset.dens || 'normal';
-    return { fit: f.fit.checked, name: Number(f.name.value), density: d, before: Number(f.before.value), after: Number(f.after.value), label: 'Personalizado', presetId: null };
+    const cw = Number(f.colw.value);
+    return { fit: f.fit.checked, name: Number(f.name.value), colw: cw && cw < 80 ? 80 : cw, density: d, before: Number(f.before.value), after: Number(f.after.value), label: 'Personalizado', presetId: null };
   };
   const refresh = () => {
     const nv = cur(); saveView(nv);
-    $('#vname').textContent = nv.name ? nv.name + ' px' : 'automático'; $('#vbef').textContent = nv.before; $('#vaft').textContent = nv.after;
+    $('#vname').textContent = nv.name ? nv.name + ' px' : 'automático';
+    $('#vcolw').textContent = nv.colw ? nv.colw + ' px' : 'automática'; $('#vbef').textContent = nv.before; $('#vaft').textContent = nv.after;
     $('#vprev').innerHTML = previewHtml(nv); applyGridPrefs();
     $$('.pcard').forEach((x) => x.classList.remove('on'));
   };
