@@ -1105,9 +1105,9 @@ function viewLive() {
   const talkIdx = blocks.map((b, i) => (b.kind !== 'intervalo' ? i : -1)).filter((i) => i >= 0);
   const vp = viewPrefs();
   const before = vp.before ? talkIdx.filter((i) => i < center).slice(-vp.before) : [];
-  const start = before.length ? before[0] : center;
+  const start = vp.showAll ? 0 : before.length ? before[0] : center;
   let cols = []; let talks = 0;
-  for (let i = start; i < blocks.length && talks < vp.before + 1 + vp.after; i++) { cols.push(blocks[i]); if (blocks[i].kind !== 'intervalo') talks++; }
+  for (let i = start; i < blocks.length && (vp.showAll || talks < vp.before + 1 + vp.after); i++) { cols.push(blocks[i]); if (blocks[i].kind !== 'intervalo') talks++; }
   const next = blocks.slice(a.currentIdx + 1).find((b) => b.kind !== 'intervalo');
   const lowNext = next ? next.slots.map((sl) => mics.find((m) => m.id === sl.mic_id)).filter((m) => m && m.battery <= 1) : [];
   const { occ, prevHolder } = occupancy();
@@ -1131,6 +1131,7 @@ function viewLive() {
     ${tipDisplay()}
     <div class="gridtools"><span class="small muted">Ecrã: <b>${esc(vp.label || 'Personalizado')}</b></span><span class="grow"></span>
       <button class="btn sm" data-gz="-1" title="Mais pequeno">A−</button><button class="btn sm" data-gz="1" title="Maior">A+</button>
+      <button class="btn sm ${vp.showAll ? 'primary' : ''}" data-gall title="Mostrar o evento todo e deslizar para trás/frente">⇤ Desde o início</button>
       <button class="btn sm" data-gw="-1" title="Blocos mais estreitos">◂▸ −</button><button class="btn sm" data-gw="1" title="Blocos mais largos">◂ ▸ +</button>
       <button class="btn sm ${vp.fit && !vp.colw ? 'primary' : ''}" data-gfit title="Ajustar colunas à largura do ecrã">⤢ Ajustar ao ecrã</button>
       <a class="btn sm" href="#/display">⚙ Configurar</a></div>
@@ -1439,6 +1440,7 @@ function bindEvent(tab) {
     }
     if (t('[data-stage]')) return openStage();
     if ((el = t('[data-gz]'))) { const v = viewPrefs(); const cur = v.name || Number(getComputedStyle($('.mgrid.live') || document.body).getPropertyValue('--g-name').replace('px', '')) || 17; v.name = Math.max(10, Math.min(36, cur + Number(el.dataset.gz) * 2)); v.label = 'Personalizado'; v.presetId = null; saveView(v); return renderEvent('live'); }
+    if (t('[data-gall]')) { const v = viewPrefs(); v.showAll = !v.showAll; v.label = 'Personalizado'; v.presetId = null; saveView(v); state.gridKey = null; toast(v.showAll ? 'A mostrar o evento todo — desliza para trás para ver o início' : 'A mostrar só os blocos à volta do ON AIR'); return renderEvent('live'); }
     if ((el = t('[data-gw]'))) {
       const v = viewPrefs(); const tbl = $('.mgrid.live');
       const cur = v.colw || Number((tbl && getComputedStyle(tbl).getPropertyValue('--g-colw').replace('px', '')) || 160);
@@ -1606,8 +1608,20 @@ function bindEvent(tab) {
     const w = $('.gridwrap'); w.scrollLeft = state.gridScrollKeep.l; w.scrollTop = state.gridScrollKeep.t; state.gridScrollKeep = null;
   } else if (air) {
     const wrap = air.closest('.gridwrap'); const stickyW = $('.gcorner', wrap)?.offsetWidth || 0;
-    const r = air.getBoundingClientRect(), wr = wrap.getBoundingClientRect();
-    if (r.right > wr.right) wrap.scrollLeft += r.left - (wr.left + stickyW);
+    const vp = viewPrefs();
+    let anchor = air;
+    if (vp.showAll && tab === 'live') {
+      // recua "blocos antes" colunas de oradores, para se ver o que acabou de passar
+      const ths = $$('tr:first-child th', wrap).filter((th) => !th.classList.contains('gcorner'));
+      let k = ths.indexOf(air), n = 0;
+      while (k > 0 && n < vp.before) { k--; if (!ths[k].classList.contains('gbreak')) n++; }
+      anchor = ths[k] || air;
+      wrap.scrollLeft = 0;
+      wrap.scrollLeft = anchor.getBoundingClientRect().left - (wrap.getBoundingClientRect().left + stickyW);
+    } else {
+      const r = air.getBoundingClientRect(), wr = wrap.getBoundingClientRect();
+      if (r.right > wr.right) wrap.scrollLeft += r.left - (wr.left + stickyW);
+    }
   }
 }
 
@@ -1628,7 +1642,7 @@ const VIEW_PRESETS = [
 function viewPrefs() {
   let v = null; try { v = JSON.parse(localStorage.getItem('md_view') || 'null'); } catch { }
   if (!v) { const w = window.innerWidth; v = { ...VIEW_PRESETS.find((p) => p.id === (w < 600 ? 'phone' : w < 1200 ? 'ipad' : 'pc')) }; }
-  return { fit: true, name: 0, colw: 0, density: 'normal', before: 2, after: 4, ...v };
+  return { fit: true, name: 0, colw: 0, showAll: false, density: 'normal', before: 2, after: 4, ...v };
 }
 function saveView(v) { try { localStorage.setItem('md_view', JSON.stringify(v)); } catch { } }
 const DENS = { compact: { pad: 6, rowh: 50 }, normal: { pad: 9, rowh: 66 }, comfortable: { pad: 14, rowh: 88 } };
@@ -1643,7 +1657,9 @@ function applyGridPrefs(root = document) {
     const cols = $$('tr:first-child th', tbl).filter((th) => !th.classList.contains('gcorner'));
     const breaks = cols.filter((th) => th.classList.contains('gbreak')).length;
     const talk = Math.max(1, cols.length - breaks);
-    let colW = v.fit ? Math.floor((vw - stickyW - breaks * 46 - 8 - talk * 2) / talk) : 160;
+    const visTalk = v.showAll ? Math.min(talk, v.before + 1 + v.after) : talk;
+    const visBreaks = v.showAll ? Math.min(breaks, 1) : breaks;
+    let colW = v.fit ? Math.floor((vw - stickyW - visBreaks * 46 - 8 - visTalk * 2) / visTalk) : 160;
     colW = Math.max(v.fit ? 96 : 110, colW);
     if (v.colw > 0) colW = v.colw; // largura escolhida à mão
     const name = v.name || Math.round(Math.max(13, Math.min(24, colW / 9)));
@@ -1699,8 +1715,8 @@ function previewHtml(v) {
   let ai = blocks.findIndex((b) => b.id === event.current_block_id); if (ai < 0) ai = Math.min(2, blocks.length - 1);
   const talkIdx = blocks.map((b, i) => (b.kind !== 'intervalo' ? i : -1)).filter((i) => i >= 0);
   const bef = v.before ? talkIdx.filter((i) => i < ai).slice(-v.before) : [];
-  const start = bef.length ? bef[0] : ai; const cols = []; let t = 0;
-  for (let i = start; i < blocks.length && t < v.before + 1 + v.after; i++) { cols.push(blocks[i]); if (blocks[i].kind !== 'intervalo') t++; }
+  const start = v.showAll ? 0 : bef.length ? bef[0] : ai; const cols = []; let t = 0;
+  for (let i = start; i < blocks.length && (v.showAll || t < v.before + 1 + v.after); i++) { cols.push(blocks[i]); if (blocks[i].kind !== 'intervalo') t++; }
   const html = micGrid(cols, { airId: blocks[ai]?.id, live: true });
   state.ev = saved;
   return `<div class="small muted" style="margin-bottom:6px">Pré-visualização ${real ? `com o evento "${esc(real.event.name)}"` : 'com dados de exemplo'}</div><div class="card gridwrap live preview">${html}</div>`;
@@ -1724,10 +1740,11 @@ async function renderDisplay() {
       <form class="card" id="vform">
         <h2>Personalizar</h2>
         <label class="row" style="color:var(--text);margin-bottom:14px"><input type="checkbox" name="fit" ${v.fit ? 'checked' : ''} style="width:auto;min-height:0"> Ajustar as colunas à largura do ecrã</label>
+        <label class="row" style="color:var(--text);margin-bottom:14px;align-items:flex-start"><input type="checkbox" name="showAll" ${v.showAll ? 'checked' : ''} style="width:auto;min-height:0;margin-top:3px"> <span>Mostrar o evento todo, desde o início<br><span class="small muted">Abre no bloco ON AIR; desliza para trás para ver os blocos anteriores e para a frente para os seguintes.</span></span></label>
         <div class="field"><label>Tamanho dos nomes: <b id="vname">${v.name ? v.name + ' px' : 'automático'}</b></label><input type="range" name="name" min="0" max="32" step="1" value="${v.name || 0}"><div class="small muted">0 = automático (conforme a largura das colunas)</div></div>
         <div class="field"><label>Largura dos blocos (colunas): <b id="vcolw">${v.colw ? v.colw + ' px' : 'automática'}</b></label><input type="range" name="colw" min="0" max="360" step="10" value="${v.colw || 0}"><div class="small muted">0 = automática. Mais largo = mais espaço para os nomes (a grelha desliza para o lado); mais estreito = mais blocos à vista.</div></div>
         <div class="field"><label>Espaçamento</label><div class="seg" style="display:flex">${[['compact', 'Compacto'], ['normal', 'Normal'], ['comfortable', 'Largo']].map(([k, l]) => `<button type="button" data-dens="${k}" class="${v.density === k ? 'on' : ''}" style="flex:1">${l}</button>`).join('')}</div></div>
-        <div class="grid2"><div class="field"><label>Blocos antes: <b id="vbef">${v.before}</b></label><input type="range" name="before" min="0" max="4" value="${v.before}"></div>
+        <div class="grid2"><div class="field"><label>Blocos antes${v.showAll ? ' (à vista ao abrir)' : ''}: <b id="vbef">${v.before}</b></label><input type="range" name="before" min="0" max="4" value="${v.before}"></div>
         <div class="field"><label>Blocos depois: <b id="vaft">${v.after}</b></label><input type="range" name="after" min="1" max="12" value="${v.after}"></div></div>
         <div class="row" style="flex-wrap:wrap;gap:8px;margin-top:6px"><button type="button" class="btn" data-savepreset>💾 Guardar como predefinição</button><a class="btn primary" href="${state.lastEv ? `#/e/${state.lastEv.event.id}/live` : '#/'}">Ver no Ao vivo</a></div>
       </form>
@@ -1738,7 +1755,7 @@ async function renderDisplay() {
   const cur = () => {
     const f = $('#vform'); const d = $('[data-dens].on', f)?.dataset.dens || 'normal';
     const cw = Number(f.colw.value);
-    return { fit: f.fit.checked, name: Number(f.name.value), colw: cw && cw < 80 ? 80 : cw, density: d, before: Number(f.before.value), after: Number(f.after.value), label: 'Personalizado', presetId: null };
+    return { fit: f.fit.checked, showAll: f.showAll.checked, name: Number(f.name.value), colw: cw && cw < 80 ? 80 : cw, density: d, before: Number(f.before.value), after: Number(f.after.value), label: 'Personalizado', presetId: null };
   };
   const refresh = () => {
     const nv = cur(); saveView(nv);
