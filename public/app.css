@@ -506,3 +506,46 @@ td.gair.gfree { background: #1a1213; }
 @media (hover: none), (pointer: coarse) {
   .gridwrap, .matrixwrap { max-height: none; overflow-x: auto; overflow-y: visible; }
 }
+
+/* grelha ajustável (preferências de ecrã) */
+.mgrid.tuned .gc, .mgrid.tuned .gh { min-width: var(--g-colw); width: var(--g-colw); max-width: var(--g-colw); }
+.mgrid.tuned th.gbreak .gh { min-width: 44px; width: 44px; }
+.mgrid.tuned .gc { min-height: var(--g-rowh); padding: var(--g-pad) calc(var(--g-pad) + 4px); }
+.mgrid.tuned .gn, .mgrid.tuned td.gair .gn { font-size: var(--g-name); }
+.mgrid.tuned .gs { font-size: var(--g-sub); }
+.mgrid.tuned .gtime { font-size: var(--g-time); }
+.mgrid.tuned .sticky { min-width: var(--g-stk); max-width: var(--g-stk); width: var(--g-stk); }
+.mgrid.tuned .gmi b { max-width: calc(var(--g-stk) - 100px); font-size: max(12px, calc(var(--g-name) * .8)); }
+.mgrid.tuned.fit .gc { overflow-wrap: break-word; hyphens: auto; }
+.gridtools { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-bottom: 8px; }
+.tipbar { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; border-color: #1d3a5c; background: #101a26; }
+.pgridp { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 10px; margin-top: 6px; }
+.pcard { position: relative; text-align: left; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; color: var(--text); cursor: pointer; display: flex; flex-direction: column; gap: 4px; }
+.pcard small { color: var(--muted); font-size: 12.5px; }
+.pcard.on { border-color: var(--accent); background: #12261e; }
+.pcard .pdel { position: absolute; top: 6px; right: 8px; color: var(--muted); padding: 2px 6px; }
+.gridwrap.preview { max-height: 520px; }
+@media (max-width: 760px) { #vform { order: 2; } .grid2:has(#vform) { grid-template-columns: 1fr !important; } }
+main.wide { max-width: none; }
+@media (min-width: 1300px) { main.wide { padding-left: 24px; padding-right: 24px; } }
+
+/* arrastar micros */
+.mic .drag { position: absolute; top: 8px; right: 10px; font-size: 20px; line-height: 1; color: var(--muted); cursor: grab; padding: 6px 8px; border-radius: 8px; touch-action: none; user-select: none; -webkit-user-select: none; }
+.mic .drag:hover { background: var(--panel2); color: var(--text); }
+.mic.dragging { opacity: .85; outline: 2px dashed var(--accent); transform: scale(1.02); box-shadow: 0 16px 40px rgba(0,0,0,.5); z-index: 5; }
+.mic.dragging .drag { cursor: grabbing; }
+.mic .head { padding-right: 30px; }
+.nosel, .nosel * { user-select: none !important; -webkit-user-select: none !important; }
+
+/* catálogo de mesas */
+.specs { display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; text-align: center; }
+.specs b { display: block; font-size: 24px; font-weight: 800; color: var(--accent); }
+.specs span { font-size: 11.5px; color: var(--muted); }
+.deskcap { margin: -4px 0 12px; color: var(--muted); font-size: 14px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.deskcap b { color: var(--text); }
+@media (max-width: 560px) { .specs { grid-template-columns: repeat(3, 1fr); } }
+
+/* integrações */
+.rcv h3 { margin: 0 0 2px; }
+.rawpre { background: #0b0c0e; border: 1px solid var(--line); border-radius: 8px; padding: 10px; font-size: 12px; white-space: pre-wrap; word-break: break-all; max-height: 240px; overflow: auto; }
+code { background: var(--panel2); padding: 1px 6px; border-radius: 5px; font-size: 13px; }

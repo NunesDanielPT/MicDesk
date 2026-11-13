@@ -22,6 +22,25 @@ App web (iPad, telemóvel e PC) para gerir microfones, pilhas e o alinhamento de
   - se o bloco entrou atrasado ou adiantado, e quantos minutos de atraso o próximo bloco já leva.
   - O botão **⛶ Ecrã de palco** mostra o countdown em ecrã inteiro, para um monitor de palco ou um iPad virado para o orador.
   - Todos os aparelhos usam o relógio do servidor, por isso mostram o mesmo tempo.
+- **Ecrã e experiência** (menu → 🖥 Ecrã e experiência): a grelha do Ao vivo ajusta-se ao ecrã.
+  - Predefinições da app: Automático, PC/régie, iPad, Telemóvel, Palco/letra grande e Visão total.
+  - Também podes ajustar à mão o tamanho dos nomes, o espaçamento e quantos blocos aparecem antes e depois, com pré-visualização ao vivo.
+  - As tuas próprias predefinições ficam guardadas na tua conta, para usares em todos os aparelhos. A escolha ativa é guardada em cada aparelho.
+  - No Ao vivo há atalhos **A− / A+ / ⤢ Ajustar ao ecrã**.
+- **Arrastar micros**: na página Micros, usa a pega ⠿ para arrastar um cartão e mudar a ordem. Funciona com rato e com toque.
+- **📚 Catálogo de mesas** (Mesa → Escolher mesa): escolhes a marca, o modelo e a versão, e a matriz é criada com as saídas da mesa (mains, buses e matrizes) e a capacidade de canais. Se usares um canal acima da capacidade, aparece um aviso.
+  - Behringer: WING, X32, XR18
+  - Midas: M32, MR18
+  - Yamaha: DM7, DM3, CL, QL, TF
+  - Allen & Heath: SQ, Avantis, dLive
+  - DiGiCo: S21, SD12, Quantum 225
+  - Soundcraft: Ui24R
+- **🔌 Integrações com bases de micros (beta, só super admin)**: lê o nome do canal, a frequência e a bateria diretamente das bases de micros sem fios pela rede.
+  - **Shure** ULX-D, QLX-D, SLX-D e Axient Digital (TCP 2202).
+  - **Sennheiser SSC** EW-DX, Digital 6000 e SpeechLine (UDP 45, experimental).
+  - **Modo de teste** com comandos TCP/UDP em bruto, para as outras marcas.
+  - Cada canal pode ficar ligado a um micro de um evento. Com "auto 30 s", a bateria e a frequência atualizam-se sozinhas e as alterações ficam no histórico.
+  - O servidor MicDesk tem de estar na mesma rede que as bases.
 - **Mesa (matriz de áudio)**: guarda o modelo da mesa, os canais e as saídas, e a matriz que diz que canal vai para que saída.
   - Cada canal tem número, nome, micro ligado, entrada física ou stagebox e 48V.
   - As saídas são, por exemplo, PA, monitores, gravação e streaming.

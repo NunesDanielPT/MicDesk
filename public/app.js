@@ -177,6 +177,8 @@ async function renderInner() {
   stopStream(); state.ev = null; state.evId = null;
   if (parts[0] === 'admin') return renderAdmin();
   if (parts[0] === 'account') return renderAccount();
+  if (parts[0] === 'display') return renderDisplay();
+  if (parts[0] === 'integrations') return renderIntegrations();
   return renderHome();
 }
 
@@ -224,7 +226,7 @@ document.addEventListener('visibilitychange', () => { if (!document.hidden && st
 const canWrite = () => !!state.me;
 const isSuper = () => state.me && state.me.role === 'superadmin';
 
-function shell(content, { crumb = '', tabs = '' } = {}) {
+function shell(content, { crumb = '', tabs = '', wide = false } = {}) {
   const u = state.me;
   return `<header class="topbar">
     <div class="row">
@@ -238,8 +240,9 @@ function shell(content, { crumb = '', tabs = '' } = {}) {
           <div class="small muted" style="padding:8px 12px">${esc(u.email)}<br>${ROLES[u.role]}</div>
           <hr>
           <a href="#/">Eventos</a>
-          ${u.role === 'superadmin' ? '<a href="#/admin">Utilizadores</a>' : ''}
+          ${u.role === 'superadmin' ? '<a href="#/admin">Utilizadores</a><a href="#/integrations">🔌 Integrações <span class="pill info" style="font-size:10px">beta</span></a>' : ''}
           <a href="#/account">A minha conta</a>
+          <a href="#/display">🖥 Ecrã e experiência</a>
           ${isStandalone() ? '' : '<button data-install>📲 Instalar app</button>'}
           <hr>
           <button data-logout>Sair</button>
@@ -248,7 +251,7 @@ function shell(content, { crumb = '', tabs = '' } = {}) {
     </div>
     ${tabs}
   </header>
-  <main>${content}</main>`;
+  <main class="${wide ? 'wide' : ''}">${content}</main>`;
 }
 document.addEventListener('click', async (e) => {
   const m = e.target.closest('[data-menu]');
@@ -592,11 +595,13 @@ function renderEvent(tab) {
   const gw = $('.gridwrap');
   const keep = gw && state.gridKey === `${tab}:${event.current_block_id}` ? { l: gw.scrollLeft, t: gw.scrollTop } : null;
   const wy = window.scrollY;
-  app.innerHTML = shell(head + content, { crumb, tabs });
+  app.innerHTML = shell(head + content, { crumb, tabs, wide: tab === 'live' || (tab === 'rundown' && state.rview === 'grid') || tab === 'desk' });
   state.gridScrollKeep = keep; state.gridKey = `${tab}:${event.current_block_id}`;
   if (keep) window.scrollTo(0, wy);
+  applyGridPrefs();
   bindEvent(tab);
   updateTimers();
+  state.lastEv = state.ev;
 }
 
 // ---- alinhamento ----
@@ -861,7 +866,8 @@ function viewMics() {
   const card = (m) => {
     const uses = a.uses[m.id] || [];
     const nextUse = uses.find((u) => a.currentIdx < 0 || state.ev.blocks.indexOf(u.block) >= a.currentIdx);
-    return `<div class="card mic st-${m.status} ${m.battery === 0 ? 'dead' : m.battery === 1 ? 'low' : ''}">
+    return `<div class="card mic st-${m.status} ${m.battery === 0 ? 'dead' : m.battery === 1 ? 'low' : ''}" data-micid="${m.id}">
+      ${w && ft === 'all' ? '<span class="drag" data-drag title="Arrasta para mudar a ordem">⠿</span>' : ''}
       <div class="head" ${w ? `data-editmic="${m.id}" style="cursor:pointer"` : ''}>
         ${chip(m, 'lg')}
         <div class="meta">
@@ -1037,10 +1043,11 @@ function viewLive() {
   // janela: 2 blocos antes, ON AIR, e os seguintes (até 6 colunas de oradores)
   const center = a.currentIdx >= 0 ? a.currentIdx : Math.max(0, a.dueIdx);
   const talkIdx = blocks.map((b, i) => (b.kind !== 'intervalo' ? i : -1)).filter((i) => i >= 0);
-  const before = talkIdx.filter((i) => i < center).slice(-2);
+  const vp = viewPrefs();
+  const before = vp.before ? talkIdx.filter((i) => i < center).slice(-vp.before) : [];
   const start = before.length ? before[0] : center;
   let cols = []; let talks = 0;
-  for (let i = start; i < blocks.length && talks < 6; i++) { cols.push(blocks[i]); if (blocks[i].kind !== 'intervalo') talks++; }
+  for (let i = start; i < blocks.length && talks < vp.before + 1 + vp.after; i++) { cols.push(blocks[i]); if (blocks[i].kind !== 'intervalo') talks++; }
   const next = blocks.slice(a.currentIdx + 1).find((b) => b.kind !== 'intervalo');
   const lowNext = next ? next.slots.map((sl) => mics.find((m) => m.id === sl.mic_id)).filter((m) => m && m.battery <= 1) : [];
   const { occ, prevHolder } = occupancy();
@@ -1061,6 +1068,11 @@ function viewLive() {
       </div>` : ''}
     </div>
     ${timerPanel()}
+    ${tipDisplay()}
+    <div class="gridtools"><span class="small muted">Ecrã: <b>${esc(vp.label || 'Personalizado')}</b></span><span class="grow"></span>
+      <button class="btn sm" data-gz="-1" title="Mais pequeno">A−</button><button class="btn sm" data-gz="1" title="Maior">A+</button>
+      <button class="btn sm ${vp.fit ? 'primary' : ''}" data-gfit title="Ajustar colunas à largura do ecrã">⤢ Ajustar ao ecrã</button>
+      <a class="btn sm" href="#/display">⚙ Configurar</a></div>
     ${blocks.length ? `<div class="card gridwrap live">${micGrid(cols, { airId: a.currentId, live: true })}</div>
     <p class="small muted">Mostra os 2 blocos anteriores, o que está ON AIR e os seguintes. <span class="lg-warn">recolher de</span> = tirar o micro a quem está no ar agora para dar ao próximo. Toca num nome na coluna ON AIR para marcar como ✓ feito; noutra coluna, para marcar como <b>micado</b>.</p>`
     : '<div class="card empty">Sem alinhamento.</div>'}`;
@@ -1075,6 +1087,7 @@ function viewDesk() {
   const chs = [...cs.channels].sort((a, b) => (parseInt(a.num, 10) || 9999) - (parseInt(b.num, 10) || 9999) || a.sort - b.sort);
   const toolbar = `<div class="toolbar noprint">
     <div class="field" style="margin:0;min-width:200px;flex:1;max-width:320px"><input id="cmodel" value="${esc(event.console_model || '')}" placeholder="Modelo da mesa (ex: Yamaha CL5)"></div>
+    <button class="btn" data-pickdesk>📚 Escolher mesa</button>
     <button class="btn primary" data-addch>+ Canal</button>
     <button class="btn" data-addout>+ Saída</button>
     ${mics.length ? '<button class="btn" data-chfrommics>Canais a partir dos micros</button>' : ''}
@@ -1091,7 +1104,7 @@ function viewDesk() {
   const numCount = {}; chs.forEach((c) => { if (c.num) numCount[c.num] = (numCount[c.num] || 0) + 1; });
   const rows = chs.map((c) => {
     const m = micById[c.mic_id];
-    const dupNum = numCount[c.num] > 1;
+    const dupNum = numCount[c.num] > 1 || (event.console_inputs > 0 && parseInt(c.num, 10) > event.console_inputs);
     return `<tr><td class="sticky"><button class="chh" data-editch="${c.id}">
         <span class="chnum" ${dupNum ? 'style="color:var(--danger)" title="Número de canal repetido"' : ''}>${esc(c.num || '—')}</span>
         <span class="chname"><b>${esc(c.name || (m ? m.label : 'Canal'))}</b>
@@ -1105,11 +1118,58 @@ function viewDesk() {
     <table class="ptable"><tr><th>Canal</th><th>Nome</th><th>Micro</th><th>Entrada</th><th>48V</th>${cs.outputs.map((o) => `<th>${esc(o.name)}</th>`).join('')}</tr>
     ${chs.map((c) => { const m = micById[c.mic_id]; return `<tr><td>${esc(c.num)}</td><td>${esc(c.name)}</td><td class="m" style="background:${m ? esc(m.color) : '#fff'}">${m ? esc(m.label) : ''}</td><td>${esc(c.input)}</td><td>${c.phantom ? '●' : ''}</td>${cs.outputs.map((o) => `<td>${on.has(`${c.id}:${o.id}`) ? '●' : ''}</td>`).join('')}</tr>`; }).join('')}
     </table></div>`;
-  return toolbar + `<div class="screenonly">
+  const cap = event.console_inputs || 0;
+  const over = cap ? chs.filter((c) => parseInt(c.num, 10) > cap).length : 0;
+  const capLine = event.console_model ? `<div class="deskcap"><b>${esc(event.console_model)}</b>${cap ? ` · ${chs.length} de ${cap} canais usados` : ''} · ${cs.outputs.length} saídas
+    ${over ? `<span class="pill danger">⚠ ${over} canal(is) acima do canal ${cap}</span>` : ''}</div>` : '';
+  return toolbar + capLine + `<div class="screenonly">
     ${!chs.length ? '<div class="card small muted" style="margin-bottom:10px">Sem canais. Usa <b>+ Canal</b> ou <b>Canais a partir dos micros</b>.</div>' : ''}
     <div class="card matrixwrap"><table class="matrix">${head}${rows}${chs.length ? totals : ''}</table></div>
     <p class="small muted">Toca numa célula para ligar / desligar o canal nessa saída. Toca no nome do canal ou da saída para editar. Tudo sincroniza em tempo real.</p>
   </div>` + print;
+}
+
+// escolher mesa do catálogo (marca → modelo → versão) e criar a matriz por defeito
+function deskPicker() {
+  const C = window.CONSOLES || [];
+  const f = modal('Escolher mesa de som', `
+    <div class="grid2"><div class="field"><label>Marca</label><select name="brand">${C.map((b, i) => `<option value="${i}">${esc(b.brand)}</option>`).join('')}</select></div>
+    <div class="field"><label>Modelo</label><select name="model"></select></div></div>
+    <div class="field"><label>Versão</label><select name="ver"></select></div>
+    <div id="dspec" class="card" style="margin-bottom:14px"></div>
+    <div class="label-up">Saídas a criar na matriz</div>
+    <label class="row" style="color:var(--text);margin:8px 0"><input type="checkbox" name="mains" checked style="width:auto;min-height:0"> <span id="dmains"></span></label>
+    <div class="row" style="margin-bottom:8px"><label class="row grow" style="color:var(--text);margin:0"><input type="checkbox" name="usebus" checked style="width:auto;min-height:0"> <span id="dbusl">Buses</span></label><input name="nbus" type="number" min="0" style="width:90px"></div>
+    <div class="row" style="margin-bottom:8px"><label class="row grow" style="color:var(--text);margin:0"><input type="checkbox" name="usemtx" style="width:auto;min-height:0"> <span id="dmtxl">Matrizes</span></label><input name="nmtx" type="number" min="0" style="width:90px"></div>
+    <label class="row" style="color:var(--text);margin-top:10px"><input type="checkbox" name="replace" style="width:auto;min-height:0"> Substituir as saídas atuais da matriz</label>
+    <p class="small muted" style="margin-bottom:0">Os valores vêm das especificações do fabricante — confirma no manual da tua mesa. Depois podes renomear, apagar ou juntar saídas à vontade (ex: "Mix 1" → "Monitor palco").</p>`, {
+    submitLabel: 'Aplicar à mesa do evento', wide: true,
+    onSubmit: async (d) => {
+      const b = C[d.brand], m = b.models[d.model], v = m.versions[d.ver];
+      const outs = [];
+      if (d.mains) outs.push(...v.mains);
+      if (d.usebus) for (let i = 1; i <= Math.min(v.buses || 64, Number(d.nbus) || 0); i++) outs.push(`${m.bus} ${i}`);
+      if (d.usemtx) for (let i = 1; i <= Math.min(v.matrix || 24, Number(d.nmtx) || 0); i++) outs.push(`${m.mtx} ${i}`);
+      await api('POST', `/api/events/${state.evId}/console/preset`, { model: `${b.brand} ${v.v}`, inputs: v.inputs, outputs: outs, replace: d.replace });
+      toast(`${b.brand} ${v.v} aplicada${outs.length ? ` · ${outs.length} saídas` : ''}`); scheduleReload();
+    },
+  });
+  const sel = (n) => $(`[name=${n}]`, f);
+  const fillModels = () => { const b = C[sel('brand').value]; sel('model').innerHTML = b.models.map((m, i) => `<option value="${i}">${esc(m.model)}</option>`).join(''); fillVers(); };
+  const fillVers = () => { const m = C[sel('brand').value].models[sel('model').value]; sel('ver').innerHTML = m.versions.map((v, i) => `<option value="${i}">${esc(v.v)}</option>`).join(''); spec(); };
+  const spec = () => {
+    const b = C[sel('brand').value], m = b.models[sel('model').value], v = m.versions[sel('ver').value];
+    $('#dspec', f).innerHTML = `<div class="specs">
+      <div><b>${v.inputs}</b><span>canais de entrada</span></div><div><b>${v.buses}</b><span>${esc(m.bus.toLowerCase())} buses</span></div>
+      <div><b>${v.matrix || '—'}</b><span>matrizes</span></div><div><b>${v.mains.length}</b><span>saídas principais</span></div>
+      <div><b>${v.local || '—'}</b><span>entradas locais</span></div></div>${v.note ? `<div class="small muted" style="margin-top:8px">${esc(v.note)}</div>` : ''}`;
+    $('#dmains', f).textContent = `Saídas principais: ${v.mains.join(', ')}`;
+    $('#dbusl', f).textContent = `${m.bus} 1 … (máx. ${v.buses})`; sel('nbus').value = Math.min(v.buses, 16); sel('nbus').max = v.buses;
+    $('#dmtxl', f).textContent = v.matrix ? `${m.mtx} 1 … (máx. ${v.matrix})` : 'Esta mesa não tem matrizes dedicadas'; sel('nmtx').value = v.matrix; sel('nmtx').max = v.matrix;
+    sel('usemtx').disabled = !v.matrix; sel('nmtx').disabled = !v.matrix;
+  };
+  sel('brand').onchange = fillModels; sel('model').onchange = fillVers; sel('ver').onchange = spec;
+  fillModels();
 }
 
 function channelModal(c) {
@@ -1316,6 +1376,9 @@ function bindEvent(tab) {
       });
     }
     if (t('[data-stage]')) return openStage();
+    if ((el = t('[data-gz]'))) { const v = viewPrefs(); const cur = v.name || Number(getComputedStyle($('.mgrid.live') || document.body).getPropertyValue('--g-name').replace('px', '')) || 17; v.name = Math.max(10, Math.min(36, cur + Number(el.dataset.gz) * 2)); v.label = 'Personalizado'; v.presetId = null; saveView(v); return renderEvent('live'); }
+    if (t('[data-gfit]')) { const v = viewPrefs(); v.fit = !v.fit; v.label = 'Personalizado'; v.presetId = null; saveView(v); return renderEvent('live'); }
+    if (t('[data-tipok]')) { try { localStorage.setItem('md_tip_display', '1'); } catch { } $('.tipbar')?.remove(); if (!t('a')) return; }
     if ((el = t('[data-miked]'))) {
       const id = Number(el.dataset.miked);
       let cur = null; for (const b of state.ev.blocks) { const x = b.slots.find((y) => y.id === id); if (x) cur = x; }
@@ -1340,6 +1403,7 @@ function bindEvent(tab) {
       try { await navigator.clipboard.writeText(msg); toast('Mensagem copiada — cola no WhatsApp ou email'); } catch { modal('Mensagem de convite', `<textarea style="font-family:inherit" rows="5">${esc(msg)}</textarea>`); }
       return;
     }
+    if (t('[data-pickdesk]')) return deskPicker();
     if (t('[data-addch]')) return channelModal({});
     if ((el = t('[data-editch]'))) return channelModal(state.ev.console.channels.find((c) => c.id === Number(el.dataset.editch)));
     if (t('[data-addout]')) return outputModal({});
@@ -1434,6 +1498,35 @@ function bindEvent(tab) {
       await act(() => api('PUT', `/api/events/${state.evId}`, formData(f)), 'Guardado'); return scheduleReload();
     }
   };
+  // arrastar micros para mudar a ordem (rato e toque)
+  root.onpointerdown = (e) => {
+    const h = e.target.closest('[data-drag]'); if (!h) return;
+    e.preventDefault();
+    const card = h.closest('.mic'); const grid = card.parentElement;
+    const startOrder = $$('.mic', grid).map((x) => x.dataset.micid).join(',');
+    card.classList.add('dragging'); document.body.classList.add('nosel');
+    const move = (ev) => {
+      const y = ev.clientY;
+      if (y < 80) window.scrollBy(0, -12); else if (y > window.innerHeight - 60) window.scrollBy(0, 12);
+      card.style.visibility = 'hidden';
+      const over = document.elementFromPoint(ev.clientX, ev.clientY)?.closest('.mic');
+      card.style.visibility = '';
+      if (!over || over === card || over.parentElement !== grid) return;
+      const r = over.getBoundingClientRect();
+      const after = (ev.clientY - r.top) / r.height > 0.5 || (Math.abs(ev.clientY - (r.top + r.height / 2)) < r.height / 3 && ev.clientX > r.left + r.width / 2);
+      grid.insertBefore(card, after ? over.nextSibling : over);
+    };
+    const up = async () => {
+      window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up); window.removeEventListener('pointercancel', up);
+      card.classList.remove('dragging'); document.body.classList.remove('nosel');
+      const ids = $$('.mic', grid).map((x) => Number(x.dataset.micid));
+      if (ids.join(',') === startOrder) return;
+      await act(() => api('POST', `/api/events/${state.evId}/mics/order`, { ids }), 'Ordem dos micros guardada');
+      scheduleReload();
+    };
+    // (mover o cartão no DOM cancela o "pointer capture", por isso ouvimos na janela)
+    window.addEventListener('pointermove', move); window.addEventListener('pointerup', up); window.addEventListener('pointercancel', up);
+  };
   if (state.focusAdd) { $(`[data-addslot="${state.focusAdd}"] input`)?.focus(); state.focusAdd = null; }
   // grelha: garantir que a coluna ON AIR fica visível (no telemóvel aparece logo a seguir à coluna dos micros)
   const air = $('.gridwrap th.gair');
@@ -1451,6 +1544,241 @@ setInterval(() => {
   const c = $('#clock'); if (c) c.textContent = nowHM();
   updateTimers();
 }, 1000);
+// ---------- ecrã e experiência (por aparelho) ----------
+const VIEW_PRESETS = [
+  { id: 'auto', label: 'Automático', desc: 'Ajusta-se sozinho ao ecrã', fit: true, name: 0, density: 'normal', before: 2, after: 4 },
+  { id: 'pc', label: 'PC / régie', desc: 'Mais colunas, letra compacta', fit: true, name: 15, density: 'compact', before: 2, after: 6 },
+  { id: 'ipad', label: 'iPad', desc: 'Equilíbrio entre tamanho e colunas', fit: true, name: 18, density: 'normal', before: 2, after: 3 },
+  { id: 'phone', label: 'Telemóvel', desc: 'Poucas colunas, desliza para o lado', fit: false, name: 16, density: 'compact', before: 1, after: 2 },
+  { id: 'stage', label: 'Palco / letra grande', desc: 'Para ver de longe', fit: true, name: 26, density: 'comfortable', before: 1, after: 2 },
+  { id: 'all', label: 'Visão total', desc: 'O máximo de blocos possível', fit: true, name: 13, density: 'compact', before: 3, after: 10 },
+];
+function viewPrefs() {
+  let v = null; try { v = JSON.parse(localStorage.getItem('md_view') || 'null'); } catch { }
+  if (!v) { const w = window.innerWidth; v = { ...VIEW_PRESETS.find((p) => p.id === (w < 600 ? 'phone' : w < 1200 ? 'ipad' : 'pc')) }; }
+  return { fit: true, name: 0, density: 'normal', before: 2, after: 4, ...v };
+}
+function saveView(v) { try { localStorage.setItem('md_view', JSON.stringify(v)); } catch { } }
+const DENS = { compact: { pad: 6, rowh: 50 }, normal: { pad: 9, rowh: 66 }, comfortable: { pad: 14, rowh: 88 } };
+// aplica tamanhos à grelha; no modo "ajustar" as colunas dividem a largura disponível
+function applyGridPrefs(root = document) {
+  const v = viewPrefs();
+  $$('.gridwrap.live, .gridwrap.preview', root).forEach((wrap) => {
+    const tbl = $('.mgrid', wrap); if (!tbl) return;
+    const vw = wrap.clientWidth || window.innerWidth;
+    const d = DENS[v.density] || DENS.normal;
+    const stickyW = Math.round(Math.max(vw < 600 ? 120 : 150, Math.min(220, vw * 0.15)));
+    const cols = $$('tr:first-child th', tbl).filter((th) => !th.classList.contains('gcorner'));
+    const breaks = cols.filter((th) => th.classList.contains('gbreak')).length;
+    const talk = Math.max(1, cols.length - breaks);
+    let colW = v.fit ? Math.floor((vw - stickyW - breaks * 46 - 8 - talk * 2) / talk) : 160;
+    colW = Math.max(v.fit ? 96 : 110, colW);
+    const name = v.name || Math.round(Math.max(13, Math.min(24, colW / 9)));
+    // nomes grandes precisam de colunas largas (senão as palavras partem-se) — aí a grelha desliza
+    colW = Math.max(colW, Math.round(name * 7.2));
+    tbl.style.setProperty('--g-colw', colW + 'px');
+    tbl.style.setProperty('--g-name', name + 'px');
+    tbl.style.setProperty('--g-sub', Math.max(10, Math.round(name * 0.68)) + 'px');
+    tbl.style.setProperty('--g-time', Math.max(16, Math.min(34, Math.round(name * 1.35))) + 'px');
+    tbl.style.setProperty('--g-pad', d.pad + 'px');
+    tbl.style.setProperty('--g-rowh', Math.max(d.rowh, Math.round(name * 3.3)) + 'px');
+    tbl.style.setProperty('--g-stk', stickyW + 'px');
+    tbl.classList.add('tuned'); tbl.classList.toggle('fit', !!v.fit);
+  });
+}
+let resizeT; window.addEventListener('resize', () => { clearTimeout(resizeT); resizeT = setTimeout(() => applyGridPrefs(), 120); });
+function tipDisplay() {
+  let seen = false; try { seen = localStorage.getItem('md_tip_display') === '1'; } catch { }
+  if (seen) return '';
+  return `<div class="card tipbar"><span style="font-size:22px">🖥</span><div class="grow"><b>Ajusta o Ao vivo a este ecrã</b><div class="small muted">Escolhe uma predefinição (PC, iPad, Palco…) ou personaliza o tamanho dos nomes e o número de blocos — com pré-visualização.</div></div>
+    <a class="btn sm primary" href="#/display" data-tipok>Configurar</a><button class="btn sm ghost icon" data-tipok aria-label="Fechar">✕</button></div>`;
+}
+let userPresets = null;
+async function loadUserPresets() {
+  if (userPresets) return userPresets;
+  try { const p = await api('GET', '/api/me/prefs'); userPresets = Array.isArray(p.viewPresets) ? p.viewPresets : []; } catch { userPresets = []; }
+  return userPresets;
+}
+async function saveUserPresets() { const p = await api('GET', '/api/me/prefs').catch(() => ({})); p.viewPresets = userPresets; await api('PUT', '/api/me/prefs', p); }
+
+// dados de exemplo para a pré-visualização quando não há evento aberto
+function demoEvent() {
+  const mk = (id, label, type, color, person = '') => ({ id, label, type, color, person, battery: 3 - (id % 3 === 0 ? 2 : 0), channel: String(id), status: 'ok' });
+  const mics = [mk(1, 'Head', 'headset', '#3fa67a', 'Ana Branquinho'), mk(2, '1', 'mao', '#8f8a2c'), mk(3, '2', 'mao', '#a8740a'), mk(4, '3', 'lapela', '#a85a12'), mk(5, '4', 'lapela', '#9a3518')];
+  const sl = (id, speaker, mic_id, miked = 0) => ({ id, speaker, mic_id, miked, done: 0 });
+  const blocks = [
+    { id: 1, kind: 'painel', start_time: '14:00', title: 'Abertura', slots: [sl(1, 'Ana Branquinho', 1, 1)] },
+    { id: 2, kind: 'painel', start_time: '14:20', title: '', slots: [sl(2, 'Ricardo Nogueira', 2, 1), sl(3, 'João Nunes e Silva', 3, 1), sl(4, 'Isa Martins', 4)] },
+    { id: 3, kind: 'painel', start_time: '14:45', title: 'Painel Inovação', slots: [sl(5, 'Miguel Pinho Gil', 2), sl(6, 'Gil Falcão', 5, 1)] },
+    { id: 4, kind: 'intervalo', start_time: '15:10', title: 'Coffee Break', slots: [] },
+    { id: 5, kind: 'painel', start_time: '15:30', title: '', slots: [sl(7, 'Marina Marques', 3), sl(8, 'Carolina Bettencourt', 4)] },
+    { id: 6, kind: 'painel', start_time: '15:55', title: '', slots: [sl(9, 'Mariana Moutinho', 2), sl(10, 'Michelle Campagnoli', 3)] },
+    { id: 7, kind: 'painel', start_time: '16:20', title: '', slots: [sl(11, 'Manuel Sousa', 4), sl(12, 'Rui Rato', 5)] },
+    { id: 8, kind: 'painel', start_time: '16:45', title: 'Encerramento', slots: [sl(13, 'Ana Branquinho', 1)] },
+  ];
+  return { event: { id: 0, name: 'Exemplo', current_block_id: 3, date: '' }, mics, blocks, console: { channels: [], outputs: [], routes: [] } };
+}
+function previewHtml(v) {
+  const real = state.ev && state.ev.blocks.length ? state.ev : (state.lastEv && state.lastEv.blocks.length ? state.lastEv : null);
+  const saved = state.ev; state.ev = real || demoEvent();
+  const { blocks, event } = state.ev;
+  let ai = blocks.findIndex((b) => b.id === event.current_block_id); if (ai < 0) ai = Math.min(2, blocks.length - 1);
+  const talkIdx = blocks.map((b, i) => (b.kind !== 'intervalo' ? i : -1)).filter((i) => i >= 0);
+  const bef = v.before ? talkIdx.filter((i) => i < ai).slice(-v.before) : [];
+  const start = bef.length ? bef[0] : ai; const cols = []; let t = 0;
+  for (let i = start; i < blocks.length && t < v.before + 1 + v.after; i++) { cols.push(blocks[i]); if (blocks[i].kind !== 'intervalo') t++; }
+  const html = micGrid(cols, { airId: blocks[ai]?.id, live: true });
+  state.ev = saved;
+  return `<div class="small muted" style="margin-bottom:6px">Pré-visualização ${real ? `com o evento "${esc(real.event.name)}"` : 'com dados de exemplo'}</div><div class="card gridwrap live preview">${html}</div>`;
+}
+
+async function renderDisplay() {
+  app.innerHTML = shell('<div class="empty">A carregar…</div>', { crumb: 'Ecrã e experiência' });
+  const ups = await loadUserPresets();
+  const v = viewPrefs();
+  const card = (p, mine) => `<button class="pcard ${v.presetId === (mine ? 'u:' : '') + p.id ? 'on' : ''}" data-preset="${mine ? 'u:' : ''}${esc(p.id)}">
+      <b>${esc(p.label)}</b><small>${esc(p.desc || `${p.fit ? 'ajusta ao ecrã' : 'largura fixa'} · nomes ${p.name || 'auto'} · ${p.before}+${p.after} blocos`)}</small>
+      ${mine ? `<span class="pdel" data-delpreset="${esc(p.id)}" title="Apagar">✕</span>` : ''}</button>`;
+  app.innerHTML = shell(`
+    <h1 style="margin-top:14px">🖥 Ecrã e experiência</h1>
+    <p class="muted" style="margin-top:0">Escolhe como o <b>Ao vivo</b> aparece <b>neste aparelho</b> (o PC, o iPad e o telemóvel podem ter definições diferentes).</p>
+    <div class="label-up">Predefinições da app</div>
+    <div class="pgridp">${VIEW_PRESETS.map((p) => card(p, false)).join('')}</div>
+    <div class="label-up" style="margin-top:16px">As minhas predefinições ${ups.length ? '' : '<span class="muted" style="text-transform:none;letter-spacing:0;font-weight:400">— ainda nenhuma: ajusta abaixo e guarda</span>'}</div>
+    ${ups.length ? `<div class="pgridp">${ups.map((p) => card(p, true)).join('')}</div>` : ''}
+    <div class="grid2" style="margin-top:18px;align-items:start;grid-template-columns:minmax(260px,360px) 1fr">
+      <form class="card" id="vform">
+        <h2>Personalizar</h2>
+        <label class="row" style="color:var(--text);margin-bottom:14px"><input type="checkbox" name="fit" ${v.fit ? 'checked' : ''} style="width:auto;min-height:0"> Ajustar as colunas à largura do ecrã</label>
+        <div class="field"><label>Tamanho dos nomes: <b id="vname">${v.name ? v.name + ' px' : 'automático'}</b></label><input type="range" name="name" min="0" max="32" step="1" value="${v.name || 0}"><div class="small muted">0 = automático (conforme a largura das colunas)</div></div>
+        <div class="field"><label>Espaçamento</label><div class="seg" style="display:flex">${[['compact', 'Compacto'], ['normal', 'Normal'], ['comfortable', 'Largo']].map(([k, l]) => `<button type="button" data-dens="${k}" class="${v.density === k ? 'on' : ''}" style="flex:1">${l}</button>`).join('')}</div></div>
+        <div class="grid2"><div class="field"><label>Blocos antes: <b id="vbef">${v.before}</b></label><input type="range" name="before" min="0" max="4" value="${v.before}"></div>
+        <div class="field"><label>Blocos depois: <b id="vaft">${v.after}</b></label><input type="range" name="after" min="1" max="12" value="${v.after}"></div></div>
+        <div class="row" style="flex-wrap:wrap;gap:8px;margin-top:6px"><button type="button" class="btn" data-savepreset>💾 Guardar como predefinição</button><a class="btn primary" href="${state.lastEv ? `#/e/${state.lastEv.event.id}/live` : '#/'}">Ver no Ao vivo</a></div>
+      </form>
+      <div id="vprev">${previewHtml(v)}</div>
+    </div>`, { crumb: 'Ecrã e experiência' });
+  try { localStorage.setItem('md_tip_display', '1'); } catch { }
+  applyGridPrefs();
+  const cur = () => {
+    const f = $('#vform'); const d = $('[data-dens].on', f)?.dataset.dens || 'normal';
+    return { fit: f.fit.checked, name: Number(f.name.value), density: d, before: Number(f.before.value), after: Number(f.after.value), label: 'Personalizado', presetId: null };
+  };
+  const refresh = () => {
+    const nv = cur(); saveView(nv);
+    $('#vname').textContent = nv.name ? nv.name + ' px' : 'automático'; $('#vbef').textContent = nv.before; $('#vaft').textContent = nv.after;
+    $('#vprev').innerHTML = previewHtml(nv); applyGridPrefs();
+    $$('.pcard').forEach((x) => x.classList.remove('on'));
+  };
+  $('#vform').addEventListener('input', refresh);
+  app.onclick = async (e) => {
+    const del = e.target.closest('[data-delpreset]');
+    if (del) { e.stopPropagation(); userPresets = userPresets.filter((p) => p.id !== del.dataset.delpreset); await act(() => saveUserPresets(), 'Predefinição apagada'); return renderDisplay(); }
+    const pb = e.target.closest('[data-preset]');
+    if (pb) {
+      const id = pb.dataset.preset; const p = id.startsWith('u:') ? userPresets.find((x) => 'u:' + x.id === id) : VIEW_PRESETS.find((x) => x.id === id);
+      if (p) { saveView({ ...p, presetId: id }); toast(`Predefinição "${p.label}" aplicada neste aparelho`); return renderDisplay(); }
+    }
+    const db = e.target.closest('[data-dens]');
+    if (db) { $$('[data-dens]').forEach((x) => x.classList.toggle('on', x === db)); return refresh(); }
+    if (e.target.closest('[data-savepreset]')) {
+      modal('Guardar predefinição', '<div class="field"><label>Nome</label><input name="label" required placeholder="Ex: Régie CCB, iPad do palco"></div><p class="small muted">Fica guardada na tua conta e aparece em todos os teus aparelhos.</p>', {
+        submitLabel: 'Guardar',
+        onSubmit: async (d) => { const nv = { ...cur(), label: d.label, id: Date.now().toString(36) }; delete nv.presetId; userPresets = [...userPresets, nv]; await saveUserPresets(); saveView({ ...nv, presetId: 'u:' + nv.id }); toast('Predefinição guardada'); renderDisplay(); },
+      });
+    }
+  };
+}
+
+// ---------- integrações com bases de micros (BETA, só super admin) ----------
+const integResults = {};
+async function renderIntegrations() {
+  if (!isSuper()) return go('#/');
+  app.innerHTML = shell('<div class="empty">A carregar…</div>', { crumb: 'Integrações (beta)' });
+  const [{ brands, receivers }, mics] = await Promise.all([api('GET', '/api/integrations'), api('GET', '/api/integrations/mics')]);
+  const byEvent = {}; mics.forEach((m) => (byEvent[m.event_id] ||= { name: m.event_name, mics: [] }).mics.push(m));
+  const micOpts = (sel) => `<option value="">— não ligado —</option>` + Object.values(byEvent).map((e) => `<optgroup label="${esc(e.name)}">${e.mics.map((m) => `<option value="${m.id}" ${m.id === sel ? 'selected' : ''}>${esc(m.label)} · ${TYPES[m.type] || ''}</option>`).join('')}</optgroup>`).join('');
+  const lvl = (c) => c.level == null ? '<span class="muted">—</span>' : `${batt(c.level)} <span class="small muted">${c.batt_bars != null ? c.batt_bars + '/5 barras' : c.batt_percent != null ? c.batt_percent + '%' : ''}${c.batt_minutes != null ? ' · ' + Math.floor(c.batt_minutes / 60) + 'h' + String(c.batt_minutes % 60).padStart(2, '0') : ''}</span>`;
+  const rcvCard = (r) => {
+    const res = integResults[r.id];
+    const chans = res?.channels || r.last_data || [];
+    const links = Object.fromEntries((r.links || []).map((l) => [l.ch, l]));
+    const rows = [];
+    for (let i = 1; i <= Math.max(r.channels, chans.length ? Math.max(...chans.map((c) => c.ch)) : 0); i++) {
+      const c = chans.find((x) => x.ch === i) || { ch: i };
+      const l = links[i];
+      rows.push(`<tr><td><b>${i}</b></td><td>${esc(c.name || '—')}</td><td>${esc(c.frequency || '—')}</td><td>${lvl(c)}</td>
+        <td><select data-link="${r.id}:${i}" style="min-height:36px">${micOpts(l?.mic_id)}</select></td>
+        <td><label class="row small" style="color:var(--text);margin:0;white-space:nowrap"><input type="checkbox" data-linkname="${r.id}:${i}" ${l?.use_name ? 'checked' : ''} style="width:auto;min-height:0"> nome → pessoa</label></td></tr>`);
+    }
+    const isRaw = r.brand.startsWith('raw_');
+    return `<div class="card rcv">
+      <div class="row" style="justify-content:space-between;flex-wrap:wrap;gap:8px">
+        <div><h3>${esc(r.name || r.host)}</h3><div class="small muted">${esc(brands[r.brand]?.label || r.brand)}${r.model ? ' · ' + esc(r.model) : ''} · ${esc(r.host)}:${r.port || ''}</div>
+          <div class="small" style="margin-top:4px">${r.last_error ? `<span style="color:var(--danger)">✕ ${esc(r.last_error)}</span>` : r.last_ok ? `<span style="color:var(--accent)">● ligado</span> <span class="muted">· última leitura ${ago(r.last_ok)}</span>` : '<span class="muted">ainda não testado</span>'}</div></div>
+        <div class="row" style="flex-wrap:wrap;gap:6px">
+          <button class="btn sm primary" data-poll="${r.id}">⟳ Ler agora</button>
+          ${!isRaw ? `<button class="btn sm" data-pollapply="${r.id}">⇣ Ler e aplicar aos micros</button>
+          <label class="row small" style="color:var(--text);margin:0"><span class="switch" style="width:44px;height:26px"><input type="checkbox" data-autosync="${r.id}" ${r.autosync ? 'checked' : ''}><span></span></span> auto 30 s</label>` : ''}
+          <button class="btn sm ghost" data-delrcv="${r.id}">Apagar</button></div>
+      </div>
+      ${isRaw ? `<div class="small muted" style="margin-top:10px">Comando: <code>${esc(r.command || '(vazio)')}</code></div>` : `<div class="tablewrap" style="margin-top:12px"><table class="table"><tr><th>Canal</th><th>Nome na base</th><th>Frequência</th><th>Bateria</th><th>Micro MicDesk</th><th></th></tr>${rows.join('')}</table></div>`}
+      ${res?.raw != null ? `<details style="margin-top:10px"><summary class="small muted" style="cursor:pointer">Resposta em bruto (${res.ms} ms)</summary><pre class="rawpre">${esc(res.raw || '(vazia)')}</pre></details>` : ''}
+      ${res && !res.ok ? `<div class="small" style="color:var(--danger);margin-top:8px">${esc(res.error)}</div>` : ''}
+    </div>`;
+  };
+  app.innerHTML = shell(`
+    <h1 style="margin-top:14px">🔌 Integrações com bases de micros <span class="pill info">beta · só tu vês</span></h1>
+    <p class="muted" style="margin-top:0;max-width:900px">Liga a MicDesk às bases (receptores) de microfones sem fios pela rede para ler automaticamente o <b>nome do canal</b>, a <b>frequência</b> e a <b>bateria</b>. O servidor MicDesk tem de estar na mesma rede que as bases (ou ter rota até elas).</p>
+    <div class="grid2" style="align-items:start;grid-template-columns:minmax(280px,380px) 1fr">
+      <form class="card" id="rcvform">
+        <h2>Adicionar base</h2>
+        <div class="field"><label>Protocolo / marca</label><select name="brand">${Object.entries(brands).map(([k, b]) => `<option value="${k}" data-port="${b.port}">${esc(b.label)}</option>`).join('')}</select></div>
+        <div class="field"><label>Nome</label><input name="name" placeholder="Ex: ULX-D Palco esquerdo"></div>
+        <div class="field"><label>Modelo (opcional)</label><input name="model" placeholder="Ex: ULXD4Q, EM 6000"></div>
+        <div class="grid2"><div class="field"><label>IP da base</label><input name="host" required placeholder="192.168.1.50" inputmode="decimal"></div>
+        <div class="field"><label>Porta</label><input name="port" type="number" value="2202"></div></div>
+        <div class="field"><label>Nº de canais</label><input name="channels" type="number" min="1" max="32" value="4"></div>
+        <div class="field hide" id="rawcmd"><label>Comando a enviar</label><input name="command" placeholder="Ex: < GET 1 BATT_BARS >  ou  {&quot;rx1&quot;:{&quot;name&quot;:null}}"><div class="small muted">Usa \\r ou \\n para fim de linha.</div></div>
+        <button class="btn primary">Adicionar</button>
+      </form>
+      <div style="display:grid;gap:12px">
+        ${receivers.length ? receivers.map(rcvCard).join('') : '<div class="card empty">Ainda não há bases. Adiciona a primeira ao lado.</div>'}
+        <div class="card small muted">
+          <b style="color:var(--text)">Estado do suporte</b>
+          <ul style="margin:8px 0 0;padding-left:18px;line-height:1.6">
+            <li><b>Shure</b> ULX-D, QLX-D, SLX-D, Axient Digital — TCP 2202 (protocolo de texto oficial): nome, frequência, barras de bateria e tempo restante.</li>
+            <li><b>Sennheiser</b> EW-DX, Digital 6000, SpeechLine — Sennheiser Sound Control (SSC, JSON por UDP 45): nome, frequência e % de bateria. <i>Experimental</i> — os caminhos podem variar por modelo; usa a resposta em bruto para afinar.</li>
+            <li><b>Outras marcas</b> (Sennheiser ew G4, Sony DWX, Audio-Technica, Wisycom, Lectrosonics…): usa o modo <i>Teste</i> para enviar comandos e ver a resposta — é assim que vamos acrescentar cada protocolo.</li>
+          </ul></div>
+      </div>
+    </div>`, { crumb: 'Integrações (beta)' });
+  const fm = $('#rcvform');
+  fm.brand.onchange = () => { const o = fm.brand.selectedOptions[0]; if (o.dataset.port !== '0') fm.port.value = o.dataset.port; $('#rawcmd').classList.toggle('hide', !fm.brand.value.startsWith('raw_')); };
+  fm.onsubmit = async (e) => { e.preventDefault(); await act(() => api('POST', '/api/integrations', formData(fm)), 'Base adicionada'); renderIntegrations(); };
+  const saveLink = async (rid, ch) => {
+    const sel = $(`[data-link="${rid}:${ch}"]`), chk = $(`[data-linkname="${rid}:${ch}"]`);
+    await act(() => api('PUT', `/api/integrations/${rid}/links`, { ch, mic_id: sel.value || null, use_name: chk.checked }), sel.value ? 'Canal ligado ao micro' : 'Ligação removida');
+  };
+  app.onchange = async (e) => {
+    const l = e.target.closest('[data-link], [data-linkname]');
+    if (l) { const [rid, ch] = (l.dataset.link || l.dataset.linkname).split(':').map(Number); return saveLink(rid, ch); }
+    const a = e.target.closest('[data-autosync]');
+    if (a) return act(() => api('PUT', `/api/integrations/${a.dataset.autosync}`, { autosync: a.checked }), a.checked ? 'Sincronização automática ligada' : 'Sincronização automática desligada');
+  };
+  app.onclick = async (e) => {
+    const p = e.target.closest('[data-poll], [data-pollapply]');
+    if (p) {
+      const id = Number(p.dataset.poll || p.dataset.pollapply); p.disabled = true; p.textContent = 'A ler…';
+      integResults[id] = await api('POST', `/api/integrations/${id}/poll`, { apply: !!p.dataset.pollapply }).catch((er) => ({ ok: false, error: er.message }));
+      toast(integResults[id].ok ? `Leitura OK · ${integResults[id].channels.length} canais${p.dataset.pollapply ? ' · micros atualizados' : ''}` : integResults[id].error, !integResults[id].ok);
+      return renderIntegrations();
+    }
+    const d = e.target.closest('[data-delrcv]');
+    if (d && await confirmBox('Apagar esta base?', 'As ligações aos micros também são removidas.')) { await api('DELETE', `/api/integrations/${d.dataset.delrcv}`); renderIntegrations(); }
+  };
+}
+
 // ---------- cronómetro do bloco ON AIR ----------
 const srvNow = () => Date.now() + (state.timeOffset || 0);
 function schedAt(hm) {

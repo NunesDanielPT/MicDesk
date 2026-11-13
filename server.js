@@ -6,6 +6,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const { DatabaseSync } = require('node:sqlite');
+const integ = require('./integrations');
 
 const PORT = parseInt(process.env.PORT || '3000', 10);
 const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, 'data');
@@ -126,6 +127,26 @@ CREATE TABLE IF NOT EXISTS event_members (
 CREATE INDEX IF NOT EXISTS ix_members_user ON event_members(user_id);
 CREATE INDEX IF NOT EXISTS ix_members_email ON event_members(email);
 CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT);
+CREATE TABLE IF NOT EXISTS receivers (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL DEFAULT '',
+  brand TEXT NOT NULL,
+  model TEXT DEFAULT '',
+  host TEXT NOT NULL,
+  port INTEGER,
+  channels INTEGER NOT NULL DEFAULT 2,
+  command TEXT DEFAULT '',
+  autosync INTEGER NOT NULL DEFAULT 0,
+  last_ok TEXT, last_error TEXT, last_data TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE TABLE IF NOT EXISTS receiver_links (
+  receiver_id INTEGER NOT NULL REFERENCES receivers(id) ON DELETE CASCADE,
+  ch INTEGER NOT NULL,
+  mic_id INTEGER NOT NULL REFERENCES mics(id) ON DELETE CASCADE,
+  use_name INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (receiver_id, ch)
+);
 CREATE TABLE IF NOT EXISTS event_log (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   event_id INTEGER NOT NULL REFERENCES events(id) ON DELETE CASCADE,
@@ -149,6 +170,9 @@ CREATE INDEX IF NOT EXISTS ix_slots_block ON slots(block_id);
   if (!cols.includes('on_air_at')) db.exec('ALTER TABLE events ADD COLUMN on_air_at TEXT');
   const scols = db.prepare('PRAGMA table_info(slots)').all().map((c) => c.name);
   if (!scols.includes('miked')) db.exec('ALTER TABLE slots ADD COLUMN miked INTEGER NOT NULL DEFAULT 0');
+  const ucols = db.prepare('PRAGMA table_info(users)').all().map((c) => c.name);
+  if (!ucols.includes('prefs')) db.exec("ALTER TABLE users ADD COLUMN prefs TEXT DEFAULT ''");
+  if (!cols.includes('console_inputs')) db.exec('ALTER TABLE events ADD COLUMN console_inputs INTEGER DEFAULT 0');
   if (!cols.includes('console_model')) db.exec("ALTER TABLE events ADD COLUMN console_model TEXT DEFAULT ''");
   if (cols.includes('org_id')) {
     // sem clientes: cada evento passa a pertencer a um utilizador
@@ -437,6 +461,11 @@ route('POST', '/api/logout', (req, res) => {
 
 route('GET', '/api/me', (req, res, b, p, u) => ({ user: u, types: MIC_TYPES, colors: DEFAULT_COLORS }));
 
+route('GET', '/api/me/prefs', (req, res, b, p, u) => { const r = get('SELECT prefs FROM users WHERE id = ?', u.id); try { return JSON.parse(r.prefs || '{}'); } catch { return {}; } });
+route('PUT', '/api/me/prefs', (req, res, body, p, u) => {
+  const txt = JSON.stringify(body || {}); if (txt.length > 20000) throw bad('Preferências demasiado grandes');
+  run('UPDATE users SET prefs = ? WHERE id = ?', txt, u.id); return { ok: true };
+});
 route('POST', '/api/me/password', (req, res, body, p, u) => {
   const row = get('SELECT pass FROM users WHERE id = ?', u.id);
   if (!checkPass(String(body.current || ''), row.pass)) throw bad('Password atual errada');
@@ -880,6 +909,105 @@ route('POST', '/api/events/:id/channels/from-mics', (req, res, body, p, u) => {
   changed(u, ev.id, `criou ${n} canais na mesa a partir dos micros`); return { created: n };
 });
 
+// aplicar uma mesa do catálogo: modelo, capacidade de entradas e saídas por defeito
+route('POST', '/api/events/:id/console/preset', (req, res, body, p, u) => {
+  const ev = eventFor(u, p.id);
+  const model = s(body.model, 120); const inputs = Math.max(0, Math.min(1024, parseInt(body.inputs, 10) || 0));
+  const outs = (Array.isArray(body.outputs) ? body.outputs : []).map((n) => s(n, 40)).filter(Boolean).slice(0, 200);
+  tx(() => {
+    run('UPDATE events SET console_model = ?, console_inputs = ? WHERE id = ?', model, inputs, ev.id);
+    if (body.replace) run('DELETE FROM console_outputs WHERE event_id = ?', ev.id);
+    const have = new Set(all('SELECT name FROM console_outputs WHERE event_id = ?', ev.id).map((r) => r.name.toLowerCase()));
+    for (const n of outs) if (!have.has(n.toLowerCase())) run('INSERT INTO console_outputs (event_id, name, sort) VALUES (?,?,?)', ev.id, n, nextSort('console_outputs', ev.id));
+  });
+  changed(u, ev.id, `aplicou a mesa ${model}${outs.length ? ` (${outs.length} saídas)` : ''}`);
+  return { ok: true };
+});
+
+// ---------- integrações com bases de micros (BETA, só super admin) ----------
+function needSuperI(u) { if (!isSuper(u)) throw forbid('Área reservada ao super admin'); }
+const rcvRow = (id) => { const r = get('SELECT * FROM receivers WHERE id = ?', Number(id)); if (!r) throw notFound(); return r; };
+route('GET', '/api/integrations', (req, res, b, p, u) => {
+  needSuperI(u);
+  const rows = all('SELECT * FROM receivers ORDER BY id');
+  for (const r of rows) {
+    r.links = all(`SELECT l.ch, l.mic_id, l.use_name, m.label AS mic_label, e.id AS event_id, e.name AS event_name FROM receiver_links l
+      JOIN mics m ON m.id = l.mic_id JOIN events e ON e.id = m.event_id WHERE l.receiver_id = ? ORDER BY l.ch`, r.id);
+    try { r.last_data = JSON.parse(r.last_data || 'null'); } catch { r.last_data = null; }
+  }
+  return { brands: integ.BRANDS, receivers: rows };
+});
+route('POST', '/api/integrations', (req, res, body, p, u) => {
+  needSuperI(u);
+  if (!integ.BRANDS[body.brand]) throw bad('Escolhe a marca / protocolo');
+  const host = s(body.host, 120); if (!host) throw bad('Falta o IP da base');
+  const r = run('INSERT INTO receivers (name, brand, model, host, port, channels, command) VALUES (?,?,?,?,?,?,?)',
+    s(body.name, 80), body.brand, s(body.model, 80), host, parseInt(body.port, 10) || integ.BRANDS[body.brand].port || null, Math.max(1, Math.min(32, parseInt(body.channels, 10) || 2)), s(body.command, 500));
+  return { id: Number(r.lastInsertRowid) };
+});
+route('PUT', '/api/integrations/:id', (req, res, body, p, u) => {
+  needSuperI(u); const r = rcvRow(p.id);
+  run('UPDATE receivers SET name=?, model=?, host=?, port=?, channels=?, command=?, autosync=? WHERE id=?',
+    s(body.name ?? r.name, 80), s(body.model ?? r.model, 80), s(body.host ?? r.host, 120), parseInt(body.port ?? r.port, 10) || null,
+    Math.max(1, Math.min(32, parseInt(body.channels ?? r.channels, 10) || 2)), s(body.command ?? r.command, 500), body.autosync == null ? r.autosync : (body.autosync ? 1 : 0), r.id);
+  return { ok: true };
+});
+route('DELETE', '/api/integrations/:id', (req, res, b, p, u) => { needSuperI(u); run('DELETE FROM receivers WHERE id = ?', rcvRow(p.id).id); return { ok: true }; });
+route('POST', '/api/integrations/:id/poll', async (req, res, body, p, u) => {
+  needSuperI(u); const r = rcvRow(p.id);
+  try {
+    const out = await integ.poll(r);
+    run("UPDATE receivers SET last_ok = datetime('now'), last_error = NULL, last_data = ? WHERE id = ?", JSON.stringify(out.channels), r.id);
+    if (body.apply) applyLinks(r, out.channels, u);
+    return out;
+  } catch (e) {
+    run('UPDATE receivers SET last_error = ? WHERE id = ?', e.message, r.id);
+    return { ok: false, error: e.message };
+  }
+});
+route('PUT', '/api/integrations/:id/links', (req, res, body, p, u) => {
+  needSuperI(u); const r = rcvRow(p.id);
+  const ch = parseInt(body.ch, 10); if (!ch) throw bad('Canal inválido');
+  if (!body.mic_id) run('DELETE FROM receiver_links WHERE receiver_id = ? AND ch = ?', r.id, ch);
+  else {
+    const m = get('SELECT id FROM mics WHERE id = ?', Number(body.mic_id)); if (!m) throw bad('Micro inválido');
+    run('INSERT INTO receiver_links (receiver_id, ch, mic_id, use_name) VALUES (?,?,?,?) ON CONFLICT(receiver_id, ch) DO UPDATE SET mic_id = excluded.mic_id, use_name = excluded.use_name', r.id, ch, m.id, body.use_name ? 1 : 0);
+  }
+  return { ok: true };
+});
+route('GET', '/api/integrations/mics', (req, res, b, p, u) => {
+  needSuperI(u);
+  return all(`SELECT m.id, m.label, m.type, e.id AS event_id, e.name AS event_name, e.date FROM mics m JOIN events e ON e.id = m.event_id
+    WHERE e.archived = 0 ORDER BY e.date DESC, e.id DESC, m.sort, m.id LIMIT 2000`);
+});
+// copia frequência / bateria / nome do canal para o micro ligado
+function applyLinks(r, channels, u) {
+  const who = { id: u ? u.id : null, name: `Integração ${r.name || r.host}`, email: '' };
+  for (const l of all('SELECT * FROM receiver_links WHERE receiver_id = ?', r.id)) {
+    const c = channels.find((x) => x.ch === l.ch); if (!c) continue;
+    const m = get('SELECT * FROM mics WHERE id = ?', l.mic_id); if (!m) continue;
+    const msgs = [];
+    if (c.frequency && c.frequency !== m.frequency) { run('UPDATE mics SET frequency = ? WHERE id = ?', c.frequency, m.id); msgs.push(`frequência ${c.frequency}`); }
+    if (c.level != null && c.level !== m.battery) {
+      run("UPDATE mics SET battery = ?, battery_at = datetime('now') WHERE id = ?", c.level, m.id);
+      run('INSERT INTO battery_log (mic_id, level, user_name) VALUES (?,?,?)', m.id, c.level, who.name);
+      msgs.push(`pilhas ${BATT_TXT[m.battery]} → ${BATT_TXT[c.level]}`);
+    }
+    if (l.use_name && c.name && c.name !== m.person) { run('UPDATE mics SET person = ? WHERE id = ?', c.name, m.id); msgs.push(`nome "${c.name}"`); }
+    if (msgs.length) changed(who, m.event_id, `atualizou o micro ${m.label} a partir da base: ${msgs.join(', ')}`);
+  }
+}
+// sincronização automática a cada 30 s para bases com "autosync"
+setInterval(async () => {
+  for (const r of all('SELECT * FROM receivers WHERE autosync = 1')) {
+    try {
+      const out = await integ.poll(r);
+      run("UPDATE receivers SET last_ok = datetime('now'), last_error = NULL, last_data = ? WHERE id = ?", JSON.stringify(out.channels), r.id);
+      applyLinks(r, out.channels, null);
+    } catch (e) { run('UPDATE receivers SET last_error = ? WHERE id = ?', e.message, r.id); }
+  }
+}, 30000).unref();
+
 // histórico do evento
 route('GET', '/api/events/:id/log', (req, res, b, p, u, query) => {
   const ev = eventFor(u, p.id);
@@ -920,7 +1048,7 @@ function serveStatic(req, res, pathname) {
   const ext = path.extname(file);
   if (ext === '.html') {
     // cada arranque do servidor muda a versão dos ficheiros → o browser nunca usa JS/CSS antigos
-    const html = fs.readFileSync(file, 'utf8').replace(/(\/app\.(?:js|css))/g, `$1?v=${ASSET_VERSION}`);
+    const html = fs.readFileSync(file, 'utf8').replace(/(\/(?:app|consoles)\.(?:js|css))/g, `$1?v=${ASSET_VERSION}`);
     res.writeHead(200, { 'Content-Type': MIME[ext], 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' });
     return res.end(html);
   }
